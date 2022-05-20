@@ -1,3 +1,5 @@
+#!/bin/bash
+
 echo "building go/co"
 go build -o ./bin/ ./go/co/
 echo "building go/cs"
