@@ -114,6 +114,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	return n, err
 }
 
+// Read and parse OOB data
 func (c *connUDPIPv4) handleOOB(msg *ipv4.Message, readTime time.Time) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 	oob := msg.OOB[:msg.NN]
