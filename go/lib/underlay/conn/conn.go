@@ -94,7 +94,7 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	readTime := time.Now()
-	log.Info("Batch read at: ", readTime)
+	log.Info("Batch read at: ", readTime.UnixNano())
 	return n, err
 }
 
