@@ -5,7 +5,6 @@ if [ "$1" ]
         kill -s SIGTERM $1;
 fi
 
-sudo unlink /tmp/supervisor.sock
 
 supervisor/supervisor.sh reload;
 supervisor/supervisor.sh start all;
