@@ -232,13 +232,6 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 	//	unix.SOF_TIMESTAMPING_OPT_TX_SWHW | // generate two cmsg(sw + hw)
 	//	unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG) // for tx
 
-	// Set reporting socket options
-	// This is for packet drops we might not need it so i'll comment it out for now
-	//if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL, 1); err != nil {
-	//	return serrors.WrapStr("Error setting SO_RXQ_OVFL socket option", err,
-	//		"listen", laddr, "remote", raddr)
-	//}
-
 	// Enable receiving of socket timestamps in ns.
 	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_TIMESTAMPNS, 1); err != nil {
 		return serrors.WrapStr("Error setting SO_TIMESTAMPNS socket option", err,
