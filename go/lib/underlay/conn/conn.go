@@ -21,7 +21,6 @@ package conn
 
 import (
 	"net"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -94,8 +93,11 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
-	readTime := time.Now()
-	log.Info("Batch read at:", "time", strconv.FormatInt(readTime.UnixNano(), 10))
+	// TODO (daniele): Check if this is the right location since this is always in batches....
+	// Uncommented for now as it spams the logs like crazy.
+	//readTime := time.Now()
+	//log.Info("Batch read at:", "time", strconv.FormatInt(readTime.UnixNano(), 10))
+
 	return n, err
 }
 
@@ -178,6 +180,24 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 				"network", network, "listen", laddr, "remote", raddr)
 		}
 	}
+
+	// TODO (daniele): Check differences in unix flags and syscall flags.
+	//tsflags := (unix.SOF_TIMESTAMPING_SOFTWARE | unix.SOF_TIMESTAMPING_RX_SOFTWARE | // sw rx
+	//	unix.SOF_TIMESTAMPING_RX_HARDWARE | unix.SOF_TIMESTAMPING_RAW_HARDWARE | // hw rx
+	//	unix.SOF_TIMESTAMPING_TX_SOFTWARE | unix.SOF_TIMESTAMPING_TX_HARDWARE | // sw + hw tx
+	//	unix.SOF_TIMESTAMPING_OPT_TX_SWHW | // generate two cmsg(sw + hw)
+	//	unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG) // for tx
+
+	// Set reporting socket options
+	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL, 1); err != nil {
+		return serrors.WrapStr("Error setting SO_RXQ_OVFL socket option", err,
+			"listen", laddr, "remote", raddr)
+	}
+	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_TIMESTAMPNS, 1); err != nil {
+		return serrors.WrapStr("Error setting SO_TIMESTAMPNS socket option", err,
+			"listen", laddr, "remote", raddr)
+	}
+
 	// Set and confirm receive buffer size
 	before, err := sockctrl.GetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_RCVBUF)
 	if err != nil {
