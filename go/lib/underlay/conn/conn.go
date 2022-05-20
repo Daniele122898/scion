@@ -93,6 +93,8 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
+	readTime := time.Now()
+	log.Info("Batch read at: ", readTime)
 	return n, err
 }
 
