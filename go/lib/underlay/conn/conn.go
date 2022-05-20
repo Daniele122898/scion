@@ -23,6 +23,7 @@ import (
 	"net"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -31,6 +32,15 @@ import (
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/sockctrl"
 )
+
+// ReceiveBufferSize is the default size, in bytes, of receive buffers for
+// opened sockets.
+const ReceiveBufferSize = 1 << 20
+
+// Calculate the oobSize needed to hold our timestamp data
+const sizeOfTimespec = int(unsafe.Sizeof(syscall.Timespec{}))
+
+var oobSize = syscall.CmsgSpace(sizeOfTimespec)
 
 // Messages is a list of ipX.Messages. It is necessary to hide the type alias
 // between ipv4.Message, ipv6.Message and socket.Message.
@@ -189,10 +199,13 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 	//	unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG) // for tx
 
 	// Set reporting socket options
-	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL, 1); err != nil {
-		return serrors.WrapStr("Error setting SO_RXQ_OVFL socket option", err,
-			"listen", laddr, "remote", raddr)
-	}
+	// This is for packet drops we might not need it so i'll comment it out for now
+	//if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_RXQ_OVFL, 1); err != nil {
+	//	return serrors.WrapStr("Error setting SO_RXQ_OVFL socket option", err,
+	//		"listen", laddr, "remote", raddr)
+	//}
+
+	// Enable receiving of socket timestamps in ns.
 	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_TIMESTAMPNS, 1); err != nil {
 		return serrors.WrapStr("Error setting SO_TIMESTAMPNS socket option", err,
 			"listen", laddr, "remote", raddr)
