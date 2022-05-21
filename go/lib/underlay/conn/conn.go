@@ -33,10 +33,6 @@ import (
 	"github.com/scionproto/scion/go/lib/sockctrl"
 )
 
-// ReceiveBufferSize is the default size, in bytes, of receive buffers for
-// opened sockets.
-const ReceiveBufferSize = 1 << 20
-
 // Calculate the oobSize needed to hold our timestamp data
 const sizeOfTimespec = int(unsafe.Sizeof(syscall.Timespec{}))
 
@@ -52,6 +48,7 @@ type Conn interface {
 	ReadBatch(Messages) (int, error)
 	Write([]byte) (int, error)
 	WriteTo([]byte, *net.UDPAddr) (int, error)
+	HandleOOBBatch(Messages, []time.Time) (int, error)
 	WriteBatch(Messages, int) (int, error)
 	LocalAddr() *net.UDPAddr
 	RemoteAddr() *net.UDPAddr
@@ -103,54 +100,37 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
-	// TODO (daniele): Check if this is the right location since this is always in batches....
-	readTime := time.Now()
-	log.Info("Batch read at:", "time", readTime.UnixNano())
-	for _, msg := range msgs {
-		c.handleOOB(&msg, readTime)
-	}
-
 	return n, err
 }
 
-var prevTs time.Time
-
 // Read and parse OOB data
-func (c *connUDPIPv4) handleOOB(msg *ipv4.Message, readTime time.Time) {
+func (c *connUDPIPv4) HandleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
-	oob := msg.OOB[:msg.NN]
-	for sizeofCmsgHdr <= len(oob) {
-		hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
-		if hdr.Len < syscall.SizeofCmsghdr {
-			log.Error("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
-				"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
-			return
-		}
-		if hdr.Len > uint64(len(oob)) {
-			log.Error("Cmsg from ReadBath longer than remaining buffer",
-				"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
-			return
-		}
-		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
-			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-			ts := time.Unix(tv.Sec, tv.Nsec)
-			var offset int64 = 0
-			// Offset will be 0 on the first 1-2 packets
-			if !prevTs.IsZero() {
-				offset = ts.Sub(prevTs).Nanoseconds()
+
+	parsedOOBs := 0
+	for i, msg := range msgs {
+		oob := msg.OOB[:msg.NN]
+		for sizeofCmsgHdr <= len(oob) {
+			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
+			if hdr.Len < syscall.SizeofCmsghdr {
+				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
+					"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
 			}
-			prevTs = ts
-			timeDelay := readTime.Sub(ts)
-			// Guard against leap-seconds.
-			if timeDelay < 0 {
-				timeDelay = 0
+			if hdr.Len > uint64(len(oob)) {
+				return parsedOOBs, serrors.New("Cmsg from ReadBath longer than remaining buffer",
+					"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
 			}
-			log.Info("OOB TS: ", "timestamp", ts.UnixNano(), "difference", timeDelay.Nanoseconds(), "offset", offset)
+			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
+				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
+				timestamps[i] = time.Unix(tv.Sec, tv.Nsec)
+				parsedOOBs++
+			}
+			// What we actually want is the padded length of the cmsg, but CmsgLen
+			// adds a CmsgHdr length to the result, so we subtract that.
+			oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
 		}
-		// What we actually want is the padded length of the cmsg, but CmsgLen
-		// adds a CmsgHdr length to the result, so we subtract that.
-		oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
 	}
+	return parsedOOBs, nil
 }
 
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
@@ -189,6 +169,11 @@ func newConnUDPIPv6(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv6, err
 func (c *connUDPIPv6) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	return n, err
+}
+
+func (c *connUDPIPv6) HandleOOBBatch(_ Messages, _ []time.Time) (int, error) {
+	log.Error("Tried using non-implemented HandleOOBBatch function for IPv6")
+	return 0, nil
 }
 
 func (c *connUDPIPv6) WriteBatch(msgs Messages, flags int) (int, error) {

@@ -81,6 +81,7 @@ type bfdSession interface {
 // BatchConn is a connection that supports batch reads and writes.
 type BatchConn interface {
 	ReadBatch(underlayconn.Messages) (int, error)
+	HandleOOBBatch(underlayconn.Messages, []time.Time) (int, error)
 	WriteTo([]byte, *net.UDPAddr) (int, error)
 	WriteBatch(msgs underlayconn.Messages, flags int) (int, error)
 	Close() error
@@ -486,18 +487,26 @@ func (d *DataPlane) Run(ctx context.Context) error {
 		}
 		writeMsgs := make(underlayconn.Messages, 1)
 		writeMsgs[0].Buffers = make([][]byte, 1)
+		timestamps := make([]time.Time, bufSize)
 
 		processor := newPacketProcessor(d, ingressID)
 		var scmpErr scmpError
 		for d.running {
 			pkts, err := rd.ReadBatch(msgs)
+			currTs := time.Now()
 			if err != nil {
 				log.Debug("Failed to read batch", "err", err)
 				// error metric
 				continue
 			}
+			nts, err := rd.HandleOOBBatch(msgs, timestamps)
 			if pkts == 0 {
 				continue
+			}
+			//TODO (daniele): Remove this entire loop, just for debug
+			for i := 0; i < nts; i++ {
+				timeDelay := currTs.Sub(timestamps[i])
+				log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
 			}
 			for _, p := range msgs[:pkts] {
 				// input metric
