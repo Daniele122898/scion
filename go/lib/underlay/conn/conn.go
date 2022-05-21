@@ -104,7 +104,6 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	// TODO (daniele): Check if this is the right location since this is always in batches....
-	// Uncommented for now as it spams the logs like crazy.
 	readTime := time.Now()
 	log.Info("Batch read at:", "time", readTime.UnixNano())
 	for _, msg := range msgs {
@@ -134,8 +133,9 @@ func (c *connUDPIPv4) handleOOB(msg *ipv4.Message, readTime time.Time) {
 		}
 		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
 			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-			ts := time.Unix(int64(tv.Sec), int64(tv.Nsec))
+			ts := time.Unix(tv.Sec, tv.Nsec)
 			var offset int64 = 0
+			// Offset will be 0 on the first 1-2 packets
 			if !prevTs.IsZero() {
 				offset = ts.Sub(prevTs).Nanoseconds()
 			}
