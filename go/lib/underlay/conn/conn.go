@@ -108,7 +108,7 @@ func (c *connUDPIPv4) HandleOOBBatch(msgs Messages, timestamps []time.Time) (int
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 
 	parsedOOBs := 0
-	for i, msg := range msgs {
+	for _, msg := range msgs {
 		oob := msg.OOB[:msg.NN]
 		for sizeofCmsgHdr <= len(oob) {
 			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
@@ -122,7 +122,7 @@ func (c *connUDPIPv4) HandleOOBBatch(msgs Messages, timestamps []time.Time) (int
 			}
 			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
 				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-				timestamps[i] = time.Unix(tv.Sec, tv.Nsec)
+				timestamps[parsedOOBs] = time.Unix(tv.Sec, tv.Nsec)
 				parsedOOBs++
 			}
 			// What we actually want is the padded length of the cmsg, but CmsgLen
