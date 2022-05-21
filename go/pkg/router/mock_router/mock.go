@@ -7,6 +7,7 @@ package mock_router
 import (
 	net "net"
 	reflect "reflect"
+	"time"
 
 	gomock "github.com/golang/mock/gomock"
 	conn "github.com/scionproto/scion/go/lib/underlay/conn"
@@ -16,6 +17,11 @@ import (
 type MockBatchConn struct {
 	ctrl     *gomock.Controller
 	recorder *MockBatchConnMockRecorder
+}
+
+func (m *MockBatchConn) HandleOOBBatch(messages conn.Messages, times []time.Time) (int, error) {
+	//TODO (daniele): implement me
+	panic("implement me")
 }
 
 // MockBatchConnMockRecorder is the mock recorder for MockBatchConn.
