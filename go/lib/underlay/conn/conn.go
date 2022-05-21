@@ -114,6 +114,8 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	return n, err
 }
 
+var prevTs time.Time
+
 // Read and parse OOB data
 func (c *connUDPIPv4) handleOOB(msg *ipv4.Message, readTime time.Time) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
@@ -133,12 +135,17 @@ func (c *connUDPIPv4) handleOOB(msg *ipv4.Message, readTime time.Time) {
 		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
 			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
 			ts := time.Unix(int64(tv.Sec), int64(tv.Nsec))
+			var offset int64 = 0
+			if !prevTs.IsZero() {
+				offset = ts.Sub(prevTs).Nanoseconds()
+			}
+			prevTs = ts
 			timeDelay := readTime.Sub(ts)
 			// Guard against leap-seconds.
 			if timeDelay < 0 {
 				timeDelay = 0
 			}
-			log.Info("OOB TS: ", "timestamp", ts.UnixNano(), "difference", timeDelay.Nanoseconds())
+			log.Info("OOB TS: ", "timestamp", ts.UnixNano(), "difference", timeDelay.Nanoseconds(), "offset", offset)
 		}
 		// What we actually want is the padded length of the cmsg, but CmsgLen
 		// adds a CmsgHdr length to the result, so we subtract that.
