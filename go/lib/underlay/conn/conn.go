@@ -48,7 +48,6 @@ type Conn interface {
 	ReadBatch(Messages) (int, error)
 	Write([]byte) (int, error)
 	WriteTo([]byte, *net.UDPAddr) (int, error)
-	HandleOOBBatch(Messages, []time.Time) (int, error)
 	WriteBatch(Messages, int) (int, error)
 	LocalAddr() *net.UDPAddr
 	RemoteAddr() *net.UDPAddr
@@ -104,7 +103,7 @@ var timestamps = make([]time.Time, 64)
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	currTs := time.Now()
-	nts, err := c.HandleOOBBatch(msgs, timestamps)
+	nts, err := c.handleOOBBatch(msgs, timestamps)
 	//TODO (daniele): Remove this entire loop, just for debug
 	for i := 0; i < nts; i++ {
 		timeDelay := currTs.Sub(timestamps[i])
@@ -114,7 +113,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 }
 
 // Read and parse OOB data
-func (c *connUDPIPv4) HandleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
+func (c *connUDPIPv4) handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 
 	parsedOOBs := 0
@@ -179,11 +178,6 @@ func newConnUDPIPv6(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv6, err
 func (c *connUDPIPv6) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	return n, err
-}
-
-func (c *connUDPIPv6) HandleOOBBatch(_ Messages, _ []time.Time) (int, error) {
-	log.Error("Tried using non-implemented HandleOOBBatch function for IPv6")
-	return 0, nil
 }
 
 func (c *connUDPIPv6) WriteBatch(msgs Messages, flags int) (int, error) {
@@ -269,6 +263,7 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 }
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
+	log.Info("Read single UDP packet")
 	return c.conn.ReadFromUDP(b)
 }
 
