@@ -96,10 +96,20 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 	return cc, nil
 }
 
+// 64 is the current batch count being used in the dataplane.
+var timestamps = make([]time.Time, 64)
+
 // ReadBatch reads up to len(msgs) packets, and stores them in msgs.
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
+	currTs := time.Now()
+	nts, err := c.HandleOOBBatch(msgs, timestamps)
+	//TODO (daniele): Remove this entire loop, just for debug
+	for i := 0; i < nts; i++ {
+		timeDelay := currTs.Sub(timestamps[i])
+		log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
+	}
 	return n, err
 }
 
