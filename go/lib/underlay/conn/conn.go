@@ -175,6 +175,7 @@ type connUDPBase struct {
 	conn   *net.UDPConn
 	Listen *net.UDPAddr
 	Remote *net.UDPAddr
+	oob    []byte
 	closed bool
 }
 
@@ -230,6 +231,7 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 		log.Info("Receive buffer size smaller than requested",
 			"expected", target, "actual", after/2, "before", before/2)
 	}
+	cc.oob = make([]byte, oobSize)
 	cc.conn = c
 	cc.Listen = laddr
 	cc.Remote = raddr
@@ -237,16 +239,16 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 }
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
-	log.Info("Read single UDP packet")
-	oob := make([]byte, oobSize)
-	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, oob)
-	goTime := time.Now()
-	time, err := c.handleOOB(oob[:oobn])
-	if err != nil {
-		return n, src, err
+	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.oob)
+	if oobn > 0 {
+		goTime := time.Now()
+		time, err := c.handleOOB(c.oob[:oobn])
+		if err != nil {
+			return n, src, err
+		}
+		timeDelay := goTime.Sub(time)
+		log.Info("OOB TS: ", "go ts", goTime.UnixNano(), "kernel ts", time.UnixNano(), "difference", timeDelay.Nanoseconds())
 	}
-	timeDelay := goTime.Sub(time)
-	log.Info("OOB TS: ", "go ts", goTime.UnixNano(), "kernel ts", time.UnixNano(), "difference", timeDelay.Nanoseconds())
 	return n, src, err
 	//return c.conn.ReadFromUDP(b)
 }
