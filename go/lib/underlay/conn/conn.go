@@ -101,6 +101,10 @@ var timestamps = make([]time.Time, 64)
 // ReadBatch reads up to len(msgs) packets, and stores them in msgs.
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
+	// TODO (daniele): Figure out how we can allocate OOB size without breaking everything...
+	//for _, msg := range msgs {
+	//	msg.OOB = make([]byte, oobSize)
+	//}
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	currTs := time.Now()
 	nts, err := c.handleOOBBatch(msgs, timestamps)
@@ -110,36 +114,6 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
 	}
 	return n, err
-}
-
-// Read and parse OOB data
-func (c *connUDPIPv4) handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
-	sizeofCmsgHdr := syscall.CmsgLen(0)
-
-	parsedOOBs := 0
-	for _, msg := range msgs {
-		oob := msg.OOB[:msg.NN]
-		for sizeofCmsgHdr <= len(oob) {
-			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
-			if hdr.Len < syscall.SizeofCmsghdr {
-				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
-					"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
-			}
-			if hdr.Len > uint64(len(oob)) {
-				return parsedOOBs, serrors.New("Cmsg from ReadBath longer than remaining buffer",
-					"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
-			}
-			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
-				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-				timestamps[parsedOOBs] = time.Unix(tv.Sec, tv.Nsec)
-				parsedOOBs++
-			}
-			// What we actually want is the padded length of the cmsg, but CmsgLen
-			// adds a CmsgHdr length to the result, so we subtract that.
-			oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
-		}
-	}
-	return parsedOOBs, nil
 }
 
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
@@ -264,7 +238,71 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 	log.Info("Read single UDP packet")
-	return c.conn.ReadFromUDP(b)
+	oob := make([]byte, oobSize)
+	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, oob)
+	goTime := time.Now()
+	time, err := c.handleOOB(oob[:oobn])
+	if err != nil {
+		return n, src, err
+	}
+	timeDelay := goTime.Sub(time)
+	log.Info("OOB TS: ", "go ts", goTime.UnixNano(), "kernel ts", time.UnixNano(), "difference", timeDelay.Nanoseconds())
+	return n, src, err
+	//return c.conn.ReadFromUDP(b)
+}
+
+func (c *connUDPBase) handleOOB(oob []byte) (time.Time, error) {
+	sizeofCmsgHdr := syscall.CmsgLen(0)
+
+	for sizeofCmsgHdr <= len(oob) {
+		hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
+		if hdr.Len < syscall.SizeofCmsghdr {
+			return time.Time{}, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
+				"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
+		}
+		if hdr.Len > uint64(len(oob)) {
+			return time.Time{}, serrors.New("Cmsg from ReadBath longer than remaining buffer",
+				"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
+		}
+		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
+			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
+			return time.Unix(tv.Sec, tv.Nsec), nil
+		}
+		// What we actually want is the padded length of the cmsg, but CmsgLen
+		// adds a CmsgHdr length to the result, so we subtract that.
+		oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
+	}
+	return time.Time{}, nil
+}
+
+// Read and parse OOB data
+func (c *connUDPBase) handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
+	sizeofCmsgHdr := syscall.CmsgLen(0)
+
+	parsedOOBs := 0
+	for _, msg := range msgs {
+		oob := msg.OOB[:msg.NN]
+		for sizeofCmsgHdr <= len(oob) {
+			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
+			if hdr.Len < syscall.SizeofCmsghdr {
+				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
+					"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
+			}
+			if hdr.Len > uint64(len(oob)) {
+				return parsedOOBs, serrors.New("Cmsg from ReadBath longer than remaining buffer",
+					"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
+			}
+			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
+				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
+				timestamps[parsedOOBs] = time.Unix(tv.Sec, tv.Nsec)
+				parsedOOBs++
+			}
+			// What we actually want is the padded length of the cmsg, but CmsgLen
+			// adds a CmsgHdr length to the result, so we subtract that.
+			oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
+		}
+	}
+	return parsedOOBs, nil
 }
 
 func (c *connUDPBase) Write(b []byte) (int, error) {
@@ -302,7 +340,7 @@ func NewReadMessages(n int) Messages {
 		// Allocate a single-element, to avoid allocations when setting the buffer.
 		m[i].Buffers = make([][]byte, 1)
 		// Allocate oob size
-		m[i].OOB = make([]byte, oobSize)
+		//m[i].OOB = make([]byte, oobSize)
 	}
 	return m
 }
