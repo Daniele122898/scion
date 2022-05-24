@@ -112,13 +112,13 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	//	msg.OOB = make([]byte, oobSize)
 	//}
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
-	currTs := time.Now()
-	nts, err := handleOOBBatch(msgs, timestamps)
-	//TODO (daniele): Remove this entire loop, just for debug
-	for i := 0; i < nts; i++ {
-		timeDelay := currTs.Sub(timestamps[i])
-		log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
-	}
+	//currTs := time.Now()
+	//nts, err := handleOOBBatch(msgs, timestamps)
+	////TODO (daniele): Remove this entire loop, just for debug
+	//for i := 0; i < nts; i++ {
+	//	timeDelay := currTs.Sub(timestamps[i])
+	//	log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
+	//}
 	return n, err
 }
 
@@ -407,7 +407,7 @@ func byteToTime(data []byte) (time.Time, error) {
 
 }
 
-// Temporarily Deprecated
+// Deprecated: Only worked with SO_TIMESTAMPNS. Under investigation
 func handleOOB(oob []byte) (time.Time, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 
@@ -433,12 +433,12 @@ func handleOOB(oob []byte) (time.Time, error) {
 }
 
 // Read and parse OOB data
-// Temporarily Deprecated
+// Deprecated: Only worked with SO_TIMESTAMPNS. Under investigation
 func handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
-
 	parsedOOBs := 0
 	for _, msg := range msgs {
+		log.Info("OOB SIZE", "n", msg.NN)
 		oob := msg.OOB[:msg.NN]
 		for sizeofCmsgHdr <= len(oob) {
 			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
@@ -509,7 +509,7 @@ func NewReadMessages(n int) Messages {
 	for i := range m {
 		// Allocate a single-element, to avoid allocations when setting the buffer.
 		m[i].Buffers = make([][]byte, 1)
-		// Allocate rxOob size
+		// Allocate oob size
 		//m[i].OOB = make([]byte, oobSize)
 	}
 	return m
