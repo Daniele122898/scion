@@ -116,7 +116,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	//	oobs[i] = make([]byte, oobSize)
 	//	msgs[i].OOB = oobs[i]
 	//}
-	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
+	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE) // |syscall.MSG_OOB
 	//currTs := time.Now()
 	//nts, _ := handleOOBBatch(msgs, timestamps)
 	////TODO (daniele): Remove this entire loop, just for debug
