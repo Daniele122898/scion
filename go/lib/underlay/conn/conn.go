@@ -111,9 +111,14 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	//for _, msg := range msgs {
 	//	msg.OOB = make([]byte, oobSize)
 	//}
+	//oobs := make([][]byte, len(msgs))
+	//for i := 0; i < len(msgs); i++ {
+	//	oobs[i] = make([]byte, oobSize)
+	//	msgs[i].OOB = oobs[i]
+	//}
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	//currTs := time.Now()
-	//nts, err := handleOOBBatch(msgs, timestamps)
+	//nts, _ := handleOOBBatch(msgs, timestamps)
 	////TODO (daniele): Remove this entire loop, just for debug
 	//for i := 0; i < nts; i++ {
 	//	timeDelay := currTs.Sub(timestamps[i])
@@ -301,7 +306,6 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	}
 
 	var n int
-
 	if c.Remote != nil {
 		n, err = c.conn.Write(b)
 	} else {
