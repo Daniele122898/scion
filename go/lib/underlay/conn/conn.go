@@ -259,14 +259,22 @@ var (
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.rxOob)
+	if err != nil {
+		return n, src, err
+	}
 	if oobn > 0 {
+		// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
 		goTime := time.Now()
 		kTime, err := parseOOB(c.rxOob[:oobn])
 		if err != nil {
-			return n, src, err
+			kTime = goTime // Use go time as backup
 		}
-		timeDelay := goTime.Sub(kTime)
-		log.Info("Reading Packet TS: ", "go ts", goTime.UnixNano(), "kernel ts", kTime.UnixNano(), "difference", timeDelay.Nanoseconds())
+		var offset int64 = 0
+		if !c.prevIngTs.IsZero() {
+			offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+		}
+		c.prevIngTs = kTime
+		log.Info("Reading Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 	}
 
 	_, err = decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
@@ -338,7 +346,13 @@ func readTxTimestamp(fd int, c *connUDPBase) error {
 			continue
 		}
 
-		log.Info("Writing Packet TS: ", "kernel ts", kTime.UnixNano())
+		// TODO (daniele): Potentially use goTime as backup
+		var offset int64 = 0
+		if !c.prevIngTs.IsZero() {
+			offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+		}
+
+		log.Info("Writing Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 		return nil
 	}
 	return nil
