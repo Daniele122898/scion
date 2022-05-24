@@ -20,6 +20,12 @@
 package conn
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"github.com/google/gopacket"
+	"github.com/scionproto/scion/go/lib/slayers"
+	"golang.org/x/sys/unix"
 	"net"
 	"syscall"
 	"time"
@@ -107,7 +113,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	//}
 	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE)
 	currTs := time.Now()
-	nts, err := c.handleOOBBatch(msgs, timestamps)
+	nts, err := handleOOBBatch(msgs, timestamps)
 	//TODO (daniele): Remove this entire loop, just for debug
 	for i := 0; i < nts; i++ {
 		timeDelay := currTs.Sub(timestamps[i])
@@ -172,11 +178,13 @@ func (c *connUDPIPv6) SetDeadline(t time.Time) error {
 }
 
 type connUDPBase struct {
-	conn   *net.UDPConn
-	Listen *net.UDPAddr
-	Remote *net.UDPAddr
-	oob    []byte
-	closed bool
+	conn      *net.UDPConn
+	Listen    *net.UDPAddr
+	Remote    *net.UDPAddr
+	rxOob     []byte
+	txOob     []byte
+	prevIngTs time.Time
+	closed    bool
 }
 
 func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cfg *Config) error {
@@ -198,14 +206,13 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 	}
 
 	// TODO (daniele): Check differences in unix flags and syscall flags.
-	//tsflags := (unix.SOF_TIMESTAMPING_SOFTWARE | unix.SOF_TIMESTAMPING_RX_SOFTWARE | // sw rx
-	//	unix.SOF_TIMESTAMPING_RX_HARDWARE | unix.SOF_TIMESTAMPING_RAW_HARDWARE | // hw rx
-	//	unix.SOF_TIMESTAMPING_TX_SOFTWARE | unix.SOF_TIMESTAMPING_TX_HARDWARE | // sw + hw tx
-	//	unix.SOF_TIMESTAMPING_OPT_TX_SWHW | // generate two cmsg(sw + hw)
-	//	unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG) // for tx
-
+	tsflags := unix.SOF_TIMESTAMPING_SOFTWARE | unix.SOF_TIMESTAMPING_RX_SOFTWARE | // sw rx
+		unix.SOF_TIMESTAMPING_TX_SOFTWARE | // sw tx
+		unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG // for tx
+	// TODO (daniele): Check difference to SO_TIMESTAMPNS and if this timestamp is really less accurate
+	// Sadly SO_TIMESTAMPNS did not return any timestamps for TX.
 	// Enable receiving of socket timestamps in ns.
-	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, syscall.SO_TIMESTAMPNS, 1); err != nil {
+	if err := sockctrl.SetsockoptInt(c, syscall.SOL_SOCKET, unix.SO_TIMESTAMPING_NEW, tsflags); err != nil {
 		return serrors.WrapStr("Error setting SO_TIMESTAMPNS socket option", err,
 			"listen", laddr, "remote", raddr)
 	}
@@ -231,40 +238,174 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 		log.Info("Receive buffer size smaller than requested",
 			"expected", target, "actual", after/2, "before", before/2)
 	}
-	cc.oob = make([]byte, oobSize)
+	cc.rxOob = make([]byte, oobSize)
+	cc.txOob = make([]byte, oobSize)
 	cc.conn = c
 	cc.Listen = laddr
 	cc.Remote = raddr
 	return nil
 }
 
+var (
+	// scionLayer is the SCION gopacket layer.
+	scionLayer slayers.SCION
+	hbhLayer   slayers.HopByHopExtn
+	e2eLayer   slayers.EndToEndExtn
+	udpLayer   slayers.UDP
+	scmpLayer  slayers.SCMP
+	// last is the last parsed layer, i.e. either &scionLayer, &hbhLayer or &e2eLayer
+	lastLayer gopacket.DecodingLayer
+)
+
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
-	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.oob)
+	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.rxOob)
 	if oobn > 0 {
 		goTime := time.Now()
-		time, err := c.handleOOB(c.oob[:oobn])
+		kTime, err := parseOOB(c.rxOob[:oobn])
 		if err != nil {
 			return n, src, err
 		}
-		timeDelay := goTime.Sub(time)
-		log.Info("OOB TS: ", "go ts", goTime.UnixNano(), "kernel ts", time.UnixNano(), "difference", timeDelay.Nanoseconds())
+		timeDelay := goTime.Sub(kTime)
+		log.Info("Reading Packet TS: ", "go ts", goTime.UnixNano(), "kernel ts", kTime.UnixNano(), "difference", timeDelay.Nanoseconds())
 	}
+
+	_, err = decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
+	if err == nil {
+		if data := string(udpLayer.Payload); data == "Hello, world!" {
+			log.Info(fmt.Sprintf("Reading packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
+		}
+	}
+
 	return n, src, err
 	//return c.conn.ReadFromUDP(b)
 }
 
-func (c *connUDPBase) handleOOB(oob []byte) (time.Time, error) {
+func (c *connUDPBase) Write(b []byte) (int, error) {
+	return c.conn.Write(b)
+}
+
+func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
+	_, err := decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
+	if err == nil {
+		if data := string(udpLayer.Payload); data == "Hello, world!" {
+			log.Info(fmt.Sprintf("Writing packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
+		}
+	}
+
+	var n int
+
+	if c.Remote != nil {
+		n, err = c.conn.Write(b)
+	} else {
+		n, err = c.conn.WriteTo(b, dst)
+	}
+
+	if err2 := sockctrl.SockControl(c.conn, func(fd int) error {
+		return readTxTimestamp(fd, c)
+	}); err2 != nil {
+		//log.Info("Failed to read TX timestamp", "err", err2)
+	}
+
+	return n, err
+	//return c.conn.WriteTo(b, dst)
+}
+
+// We absolutely dont care about the actual data so we dont mind it being weirdly overwritten
+var txbuff = make([]byte, 1<<16)
+
+func readTxTimestamp(fd int, c *connUDPBase) error {
+	const timeout = 1 //ms
+	const maxTries = 3
+
+	for i := 0; i < maxTries; i++ {
+		// wait for control message on error queue
+		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLPRI, Revents: 0}}
+		if _, err := unix.Poll(fds, timeout); err != nil {
+			log.Info("Failed to poll for control msg", "err", err)
+			continue
+		}
+
+		// receive message
+		_, oobn, _, _, err := unix.Recvmsg(fd, txbuff, c.txOob, unix.MSG_ERRQUEUE)
+		if err != nil {
+			log.Info("Couldn't find error msg", "err", err)
+			continue
+		}
+
+		kTime, err := parseOOB(c.txOob[:oobn])
+		if err != nil {
+			log.Info("Couldn't parse OOB data", "err", err)
+			continue
+		}
+
+		log.Info("Writing Packet TS: ", "kernel ts", kTime.UnixNano())
+		return nil
+	}
+	return nil
+}
+
+func parseOOB(oob []byte) (time.Time, error) {
+	msgs, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var kTime time.Time
+	for _, msg := range msgs {
+		if msg.Header.Level != unix.SOL_SOCKET ||
+			(msg.Header.Type != unix.SO_TIMESTAMPING && msg.Header.Type != unix.SO_TIMESTAMPING_NEW) {
+			continue
+		}
+		ts, err := scmDataToTime(msg.Data)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if ts.UnixNano() != 0 {
+			kTime = ts
+		}
+	}
+
+	return kTime, nil
+}
+
+// 2x64bit ints
+var size = 16
+
+//parses timestamps from socket control message
+func scmDataToTime(data []byte) (kts time.Time, err error) {
+	// kernel
+	kts, err = byteToTime(data[:size])
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return kts, nil
+}
+
+// byteToTime converts LittleEndian bytes into a timestamp
+func byteToTime(data []byte) (time.Time, error) {
+	ts := &unix.Timespec{}
+	b := bytes.NewReader(data)
+	if err := binary.Read(b, binary.LittleEndian, ts); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(ts.Unix()), nil
+
+}
+
+// Temporarily Deprecated
+func handleOOB(oob []byte) (time.Time, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 
 	for sizeofCmsgHdr <= len(oob) {
 		hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
 		if hdr.Len < syscall.SizeofCmsghdr {
-			return time.Time{}, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
-				"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
+			return time.Time{}, serrors.New("Cmsg from ReadBatch has corrupted header length",
+				"min", syscall.SizeofCmsghdr, "actual", hdr.Len)
 		}
 		if hdr.Len > uint64(len(oob)) {
 			return time.Time{}, serrors.New("Cmsg from ReadBath longer than remaining buffer",
-				"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
+				"max", len(oob), "actual", hdr.Len)
 		}
 		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
 			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
@@ -278,7 +419,8 @@ func (c *connUDPBase) handleOOB(oob []byte) (time.Time, error) {
 }
 
 // Read and parse OOB data
-func (c *connUDPBase) handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
+// Temporarily Deprecated
+func handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 
 	parsedOOBs := 0
@@ -287,12 +429,12 @@ func (c *connUDPBase) handleOOBBatch(msgs Messages, timestamps []time.Time) (int
 		for sizeofCmsgHdr <= len(oob) {
 			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
 			if hdr.Len < syscall.SizeofCmsghdr {
-				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length", "listen", c.Listen,
-					"remote", c.Remote, "min", syscall.SizeofCmsghdr, "actual", hdr.Len)
+				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length",
+					"min", syscall.SizeofCmsghdr, "actual", hdr.Len)
 			}
 			if hdr.Len > uint64(len(oob)) {
 				return parsedOOBs, serrors.New("Cmsg from ReadBath longer than remaining buffer",
-					"listen", c.Listen, "remote", c.Remote, "max", len(oob), "actual", hdr.Len)
+					"max", len(oob), "actual", hdr.Len)
 			}
 			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
 				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
@@ -307,15 +449,27 @@ func (c *connUDPBase) handleOOBBatch(msgs Messages, timestamps []time.Time) (int
 	return parsedOOBs, nil
 }
 
-func (c *connUDPBase) Write(b []byte) (int, error) {
-	return c.conn.Write(b)
-}
+// decodeLayers implements roughly the functionality of
+// gopacket.DecodingLayerParser, but customized to our use case with a "base"
+// layer and additional, optional layers in the given order.
+// Returns the last decoded layer.
+func decodeLayers(data []byte, base gopacket.DecodingLayer,
+	opts ...gopacket.DecodingLayer) (gopacket.DecodingLayer, error) {
 
-func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
-	if c.Remote != nil {
-		return c.conn.Write(b)
+	if err := base.DecodeFromBytes(data, gopacket.NilDecodeFeedback); err != nil {
+		return nil, err
 	}
-	return c.conn.WriteTo(b, dst)
+	last := base
+	for _, opt := range opts {
+		if opt.CanDecode().Contains(last.NextLayerType()) {
+			data := last.LayerPayload()
+			if err := opt.DecodeFromBytes(data, gopacket.NilDecodeFeedback); err != nil {
+				return nil, err
+			}
+			last = opt
+		}
+	}
+	return last, nil
 }
 
 func (c *connUDPBase) LocalAddr() *net.UDPAddr {
@@ -341,7 +495,7 @@ func NewReadMessages(n int) Messages {
 	for i := range m {
 		// Allocate a single-element, to avoid allocations when setting the buffer.
 		m[i].Buffers = make([][]byte, 1)
-		// Allocate oob size
+		// Allocate rxOob size
 		//m[i].OOB = make([]byte, oobSize)
 	}
 	return m
