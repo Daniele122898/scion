@@ -24,6 +24,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/google/gopacket"
+	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
 	"golang.org/x/sys/unix"
 	"net"
@@ -297,11 +298,73 @@ func (c *connUDPBase) Write(b []byte) (int, error) {
 	return c.conn.Write(b)
 }
 
+var optX = slayers.HopByHopOption{
+	OptType:  0x1e,
+	OptData:  []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb},
+	OptAlign: [2]uint8{8, 2},
+}
+
 func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	_, err := decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
 	if err == nil {
 		if data := string(udpLayer.Payload); data == "Hello, world!" {
 			log.Info(fmt.Sprintf("Writing packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
+
+			log.Info("Packet lengths",
+				"byte stream", len(b),
+				"scion hdr", scionLayer.HdrLen,
+				"scion pay", scionLayer.PayloadLen,
+				"hbh act", hbhLayer.ActualLen,
+				"hbh ext", hbhLayer.ExtLen,
+				"e2e act", e2eLayer.ActualLen,
+				"e2e ext", e2eLayer.ExtLen,
+				"udp", udpLayer.Length)
+
+			nhbh := &slayers.HopByHopExtn{}
+			nhbh.NextHdr = common.L4UDP
+			nhbh.Options = []*slayers.HopByHopOption{
+				(*slayers.HopByHopOption)(&optX),
+			}
+			cut := len(b) - int(udpLayer.Length)
+			buf := gopacket.NewSerializeBuffer()
+			opts := gopacket.SerializeOptions{FixLengths: true}
+			err := nhbh.SerializeTo(buf, opts)
+			if err != nil {
+				log.Info("Failed to serialize new hbh ext", "err", err)
+			} else {
+				u := b[cut:]
+				bufb := buf.Bytes()
+				scionLayer.PayloadLen = scionLayer.PayloadLen + uint16(len(bufb))
+				scionLayer.NextHdr = common.HopByHopClass
+				buf2 := gopacket.NewSerializeBuffer()
+				buf2b := buf2.Bytes()
+				err := scionLayer.SerializeTo(buf2, opts)
+				if err != nil {
+					log.Info("Failed to serialize scion header", "err", err)
+				} else {
+					b = append(buf2b, append(b[len(buf2b):cut], append(bufb, u...)...)...)
+					log.Info("New Lengths",
+						"byte", len(b),
+						"scion hdr", scionLayer.HdrLen,
+						"scion pay", scionLayer.PayloadLen,
+						"hbh act", nhbh.ActualLen,
+						"hbh ext", nhbh.ExtLen)
+				}
+			}
+
+			//nhbh.Options = append(nhbh.Options, hbhLayer.Options...)
+			//scionLayer.NextHdr = common.HopByHopClass
+			//layers := []gopacket.SerializableLayer{&scionLayer, nhbh, &e2eLayer, &udpLayer}
+			//
+			//buf := gopacket.NewSerializeBuffer()
+			//opts := gopacket.SerializeOptions{FixLengths: true}
+			//err := gopacket.SerializeLayers(buf, opts, layers...)
+			//if err != nil {
+			//	log.Info("Failed to serialize new packet", "err", err)
+			//} else {
+			//	b = buf.Bytes()
+			//}
+
 		}
 	}
 
