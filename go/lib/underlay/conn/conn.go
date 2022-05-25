@@ -102,30 +102,33 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 	return cc, nil
 }
 
-// 64 is the current batch count being used in the dataplane.
-var timestamps = make([]time.Time, 64)
-
+// TODO (daniele): Completely removed the ReadBatch call as it does NOT work for OOB data.
+// https://github.com/golang/go/issues/32465
 // ReadBatch reads up to len(msgs) packets, and stores them in msgs.
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
-	// TODO (daniele): Figure out how we can allocate OOB size without breaking everything...
-	//for _, msg := range msgs {
-	//	msg.OOB = make([]byte, oobSize)
-	//}
-	//oobs := make([][]byte, len(msgs))
-	//for i := 0; i < len(msgs); i++ {
-	//	oobs[i] = make([]byte, oobSize)
-	//	msgs[i].OOB = oobs[i]
-	//}
-	n, err := c.pconn.ReadBatch(msgs, syscall.MSG_WAITFORONE) // |syscall.MSG_OOB
-	//currTs := time.Now()
-	//nts, _ := handleOOBBatch(msgs, timestamps)
-	////TODO (daniele): Remove this entire loop, just for debug
-	//for i := 0; i < nts; i++ {
-	//	timeDelay := currTs.Sub(timestamps[i])
-	//	log.Info("OOB TS: ", "go ts", currTs.UnixNano(), "kernel ts", timestamps[i].UnixNano(), "difference", timeDelay.Nanoseconds())
-	//}
-	return n, err
+	n, oobn, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
+	if n == 0 || err != nil {
+		return 0, err
+	}
+
+	msgs[0].N = n
+	msgs[0].Addr = src
+
+	goTime := time.Now()
+	kTime, err := parseOOB(c.txOob[:oobn])
+	if err != nil {
+		kTime = goTime // Use go time as backup
+		log.Info("Used Go time as backup")
+	}
+	var offset int64 = 0
+	if !c.prevIngTs.IsZero() {
+		offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+	}
+	c.prevIngTs = kTime
+	log.Info("Reading Packet Batch TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
+
+	return 1, err
 }
 
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
@@ -274,6 +277,7 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 		kTime, err := parseOOB(c.rxOob[:oobn])
 		if err != nil {
 			kTime = goTime // Use go time as backup
+			log.Info("Used Go time as backup")
 		}
 		var offset int64 = 0
 		if !c.prevIngTs.IsZero() {
@@ -426,6 +430,10 @@ func readTxTimestamp(fd int, c *connUDPBase) error {
 }
 
 func parseOOB(oob []byte) (time.Time, error) {
+	if len(oob) == 0 {
+		return time.Time{}, serrors.New("Cant parse OOB as len is 0")
+	}
+
 	msgs, err := unix.ParseSocketControlMessage(oob)
 	if err != nil {
 		return time.Time{}, err
@@ -505,7 +513,6 @@ func handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
 	sizeofCmsgHdr := syscall.CmsgLen(0)
 	parsedOOBs := 0
 	for _, msg := range msgs {
-		log.Info("OOB SIZE", "n", msg.NN)
 		oob := msg.OOB[:msg.NN]
 		for sizeofCmsgHdr <= len(oob) {
 			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
