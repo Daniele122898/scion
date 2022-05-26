@@ -21,12 +21,15 @@ package conn
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
+	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"golang.org/x/sys/unix"
+	"io"
 	"net"
 	"syscall"
 	"time"
@@ -44,6 +47,8 @@ import (
 const sizeOfTimespec = int(unsafe.Sizeof(syscall.Timespec{}))
 
 var oobSize = syscall.CmsgSpace(sizeOfTimespec)
+
+type hbhoffset []byte
 
 // Messages is a list of ipX.Messages. It is necessary to hide the type alias
 // between ipv4.Message, ipv6.Message and socket.Message.
@@ -116,23 +121,117 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	msgs[0].Addr = src
 
 	goTime := time.Now()
-	kTime, err := parseOOB(c.txOob[:oobn])
-	if err != nil {
-		kTime = goTime // Use go time as backup
-		log.Info("Used Go time as backup")
+
+	var (
+		scionLayer slayers.SCION
+		hbhLayer   slayers.HopByHopExtn
+	)
+
+	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+
+		kTime, err2 := parseOOB(c.txOob[:oobn])
+		if err2 != nil {
+			kTime = goTime // Use go time as backup
+			log.Info("Used Go time as backup")
+		}
+		op := hbhLayer.Options[0]
+		offsetData := hbhoffset(op.OptData)
+		offsetHeader, id := offsetData.parseOffsetHeaderData()
+		pathId := string(id)
+
+		var offset int64 = 0
+		if od, ok := offsets[pathId]; ok && !od.prevIngTs.IsZero() {
+			offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+		}
+
+		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
+
+		offsets.addOrUpdateIngressTime(kTime, pathId)
+
+		log.Info("======== Reading Batch TS: \n",
+			"id", pathId,
+			"offset", offset,
+			"headoff", offsetHeader,
+			"delta", abs(offsetHeader-offset),
+			"listen", c.Listen.String(),
+			"remote", c.Remote.String())
 	}
-	//var offset int64 = 0
-	//if !c.prevIngTs.IsZero() {
-	//	offset = kTime.Sub(c.prevIngTs).Nanoseconds()
-	//}
-	c.prevIngTs = kTime
-	//log.Info("Reading Packet Batch TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 
 	return 1, err
 }
 
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
-	return c.pconn.WriteBatch(msgs, flags)
+
+	var pathId string
+	for i, _ := range msgs {
+		var (
+			scionLayer slayers.SCION
+			hbhLayer   slayers.HopByHopExtn
+		)
+
+		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer); err2 != nil || hbhLayer.ExtLen != 7 {
+			continue
+		}
+		// TODO (daniele): Check for the correct option type
+		op := hbhLayer.Options[0]
+		offsetData := hbhoffset(op.OptData)
+		offsetHeader, id := offsetData.parseOffsetHeaderData()
+		pathId = string(id)
+
+		// Calculate offset
+		var offset int64 = 0
+
+		if od, ok := offsets[pathId]; ok {
+			log.Info("=========== Writer BATCH Data",
+				"penult", od.penultIngTs.UnixNano(),
+				"last", od.prevIngTs.UnixNano(),
+				"egre", od.prevEgrTs.UnixNano())
+		}
+
+		if od, ok := offsets[pathId]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
+			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+		}
+		log.Info("======== Write Batch TS: \n",
+			"id", pathId,
+			"offset", offset,
+			"headoff", offsetHeader,
+			"delta", abs(offsetHeader-offset),
+		)
+
+		// TODO (daniele): Check against header offset for anomalities
+
+		// Write our own offset data into it
+		buf := msgs[i].Buffers[0]
+		dumpByteSlice(buf)
+		actScionHdrLen := scionLayer.HdrLen * 4
+		dataStart := actScionHdrLen + 4
+		offsetslice := buf[dataStart : dataStart+8]
+		int64ToByteSlice(offset, offsetslice)
+		buf[len(buf)-1] = buf[len(buf)-1] + 1
+		dumpByteSlice(buf)
+
+	}
+	n, err := c.pconn.WriteBatch(msgs, flags)
+
+	if len(pathId) > 0 {
+		_ = sockctrl.SockControl(c.conn, func(fd int) error {
+			return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
+		})
+	}
+
+	return n, err
+
+	//	// TODO (daniele): Rewrote Batch as loop of singles since the Batch calls dont work
+	//	// with our OOB
+	//	//log.Info("============ REACHED WRITE BATCH ================")
+
+	//	//log.Info("============ LEAVING WRITE BATCH ================")
+	//
+	//	return len(msgs), nil
+	//} else {
+	//	return c.pconn.WriteBatch(msgs, flags)
+	//}
+
 }
 
 // SetReadDeadline sets the read deadline associated with the endpoint.
@@ -186,14 +285,24 @@ func (c *connUDPIPv6) SetDeadline(t time.Time) error {
 	return c.pconn.SetDeadline(t)
 }
 
+type pathOffsetData struct {
+	penultIngTs time.Time
+	prevIngTs   time.Time
+	prevEgrTs   time.Time
+	counter     uint8
+}
+
+type offsetMap map[string]*pathOffsetData
+
+var offsets offsetMap = make(map[string]*pathOffsetData)
+
 type connUDPBase struct {
-	conn      *net.UDPConn
-	Listen    *net.UDPAddr
-	Remote    *net.UDPAddr
-	rxOob     []byte
-	txOob     []byte
-	prevIngTs time.Time
-	closed    bool
+	conn   *net.UDPConn
+	Listen *net.UDPAddr
+	Remote *net.UDPAddr
+	rxOob  []byte
+	txOob  []byte
+	closed bool
 }
 
 func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cfg *Config) error {
@@ -249,22 +358,14 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 	}
 	cc.rxOob = make([]byte, oobSize)
 	cc.txOob = make([]byte, oobSize)
+
 	cc.conn = c
 	cc.Listen = laddr
 	cc.Remote = raddr
 	return nil
 }
 
-var (
-	// scionLayer is the SCION gopacket layer.
-	scionLayer slayers.SCION
-	hbhLayer   slayers.HopByHopExtn
-	e2eLayer   slayers.EndToEndExtn
-	udpLayer   slayers.UDP
-	scmpLayer  slayers.SCMP
-	// last is the last parsed layer, i.e. either &scionLayer, &hbhLayer or &e2eLayer
-	lastLayer gopacket.DecodingLayer
-)
+// TODO (daniele): Potentially put into functions because of multithreading
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.rxOob)
@@ -272,108 +373,148 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 		return n, src, err
 	}
 	if oobn > 0 {
-		// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
-		goTime := time.Now()
-		kTime, err := parseOOB(c.rxOob[:oobn])
-		if err != nil {
-			kTime = goTime // Use go time as backup
-			log.Info("Used Go time as backup")
-		}
-		//var offset int64 = 0
-		//if !c.prevIngTs.IsZero() {
-		//	offset = kTime.Sub(c.prevIngTs).Nanoseconds()
-		//}
-		c.prevIngTs = kTime
-		//log.Info("Reading Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
-	}
+		var (
+			scionLayer slayers.SCION
+			hbhLayer   slayers.HopByHopExtn
+		)
+		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
 
-	//_, err = decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
-	//if err == nil {
-	//	if data := string(udpLayer.Payload); data == "Hello, world!" {
-	//		log.Info(fmt.Sprintf("Reading packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
-	//	}
-	//}
+			// TODO (daniele): Check for the correct option type
+			op := hbhLayer.Options[0]
+			offsetData := hbhoffset(op.OptData)
+			offsetHeader, id := offsetData.parseOffsetHeaderData()
+			// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
+			goTime := time.Now()
+			kTime, err := parseOOB(c.rxOob[:oobn])
+			if err != nil {
+				kTime = goTime // Use go time as backup
+				log.Info("Used Go time as backup")
+			}
+
+			var offset int64 = 0
+			pathId := string(id)
+			if od, ok := offsets[pathId]; ok && !od.prevIngTs.IsZero() {
+				offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+			}
+
+			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
+
+			offsets.addOrUpdateIngressTime(kTime, pathId)
+
+			log.Info("============= Reading Packet TS: \n",
+				"id", pathId,
+				"offset", offset,
+				"headoff", offsetHeader,
+				"delta", abs(offsetHeader-offset),
+				"listen", c.Listen.String(),
+				"remote", c.Remote.String())
+		}
+	}
 
 	return n, src, err
 	//return c.conn.ReadFromUDP(b)
 }
 
+// Go only has builtin abs function for float64 :)
+func abs(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 func (c *connUDPBase) Write(b []byte) (int, error) {
+	log.Info(" ========================= RANDOM WRITE CALL ============= ")
 	return c.conn.Write(b)
 }
 
-var optX = slayers.HopByHopOption{
-	OptType:  0xFD, // Experimental testing
-	OptData:  []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb},
-	OptAlign: [2]uint8{8, 2},
-}
-
 func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
-	lastlayer, err := decodeLayers(b, &scionLayer, &udpLayer)
+	var (
+		scionLayer slayers.SCION
+		hbhLayer   slayers.HopByHopExtn
+		udpLayer   slayers.UDP
+	)
+	// TODO (daniele): Get rid of this decode layer call
+	_, err := decodeLayers(b, &scionLayer, &hbhLayer, &udpLayer)
+	// Ideally we'd have a SIG running that first receives a packet, then sends it out,
+	// thus correctly storing previous timestamps. But in our test scenario, c.go directly
+	// uses the dispatchers write function and never first reads. Thus technically
+	// never reading and thus never creating prevIng Timestamps. For our PoC testing,
+	// i'll hack in that we use our egress timestamps as prev and penultimate timestamps.
+	isOrigin := hbhLayer.ExtLen > 0
+	var idstr string
 	if err == nil {
-		if data := string(udpLayer.Payload); data == "Hello, world!" {
-			log.Info(fmt.Sprintf("Writing packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
+		if id, ok := ExtFingerprint(&scionLayer); ok {
+			if data := string(udpLayer.Payload); data == "Hello, world!" {
 
-			log.Info("Packet lengths",
-				"byte stream", len(b),
-				"scion hdr", scionLayer.HdrLen,
-				"scion dest", scionLayer.DstAddrLen,
-				"scion src", scionLayer.SrcAddrLen,
-				"scion path", scionLayer.Path.Len(),
-				"scion pay", scionLayer.PayloadLen,
-				"udp", udpLayer.Length,
-				"lastlayer", len(lastlayer.LayerPayload()))
+				idstr = string(id)
 
-			dumpByteSlice(b)
+				// Calculate offset
+				var offset int64 = 0
 
-			nhbh := &slayers.HopByHopExtn{}
-			nhbh.NextHdr = common.L4UDP
-			nhbh.Options = []*slayers.HopByHopOption{
-				(*slayers.HopByHopOption)(&optX),
+				if od, ok := offsets[idstr]; ok {
+					log.Info("=========== Writer Data",
+						"penult", od.penultIngTs.UnixNano(),
+						"last", od.prevIngTs.UnixNano(),
+						"egre", od.prevEgrTs.UnixNano())
+				}
+
+				if od, ok := offsets[idstr]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
+					offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+				}
+
+				// Testing offset
+
+				// 64bit offset -> 8 bytes
+				// 20 byte pathID
+				// -> 28 bytes
+				// -> ext length of 7
+				hbhData := make([]byte, 8, 28)
+				int64ToByteSlice(offset, hbhData)
+				hbhData = append(hbhData, id...)
+				var optX = slayers.HopByHopOption{
+					OptType:  0xFD, // Experimental testing
+					OptData:  hbhData,
+					OptAlign: [2]uint8{8, 2},
+				}
+				nhbh := &slayers.HopByHopExtn{}
+				nhbh.NextHdr = common.L4UDP
+				nhbh.Options = []*slayers.HopByHopOption{&optX}
+
+				udpCutoff := len(b) - int(udpLayer.Length)
+				buf := gopacket.NewSerializeBuffer()
+				opts := gopacket.SerializeOptions{FixLengths: true}
+				err := nhbh.SerializeTo(buf, opts)
+				if err != nil {
+					log.Info("Failed to serialize new hbh ext", "err", err)
+				} else {
+					udpBytes := make([]byte, udpLayer.Length)
+					copy(udpBytes, b[udpCutoff:])
+					udpBytes[len(udpBytes)-1] = udpBytes[len(udpBytes)-1] + 1
+					restBytes := b[:udpCutoff]
+					hbhBytes := buf.Bytes()
+					nhbhBytes := len(buf.Bytes())
+					// construct new byte slice
+					b = append(restBytes, hbhBytes...)
+					b = append(b, udpBytes...)
+					// Fix Scion header values
+					// Change next Header
+					b[4] = byte(common.HopByHopClass)
+					// Change payloadLen
+					var paylen int16 = 0
+					paylen |= int16(b[7])
+					paylen |= int16(b[6]) << 8
+					paylen += int16(nhbhBytes)
+					b[6] = byte(paylen >> 8)
+					b[7] = byte(paylen)
+					log.Info("======== Writing packet: \n",
+						"isOrigin", isOrigin,
+						"id", idstr,
+						"offset", offset,
+						"listen", c.Listen.String(),
+						"remote", c.Remote.String())
+				}
 			}
-			udpCutoff := len(b) - int(udpLayer.Length)
-			buf := gopacket.NewSerializeBuffer()
-			opts := gopacket.SerializeOptions{FixLengths: true}
-			err := nhbh.SerializeTo(buf, opts)
-			if err != nil {
-				log.Info("Failed to serialize new hbh ext", "err", err)
-			} else {
-				udpBytes := make([]byte, udpLayer.Length)
-				copy(udpBytes, b[udpCutoff:])
-				restBytes := b[:udpCutoff]
-				hbhBytes := buf.Bytes()
-				nhbhBytes := len(buf.Bytes())
-				// construct new byte slice
-				b = append(restBytes, hbhBytes...)
-				b = append(b, udpBytes...)
-				// Fix Scion header values
-				// Change next Header
-				b[4] = byte(common.HopByHopClass)
-				// Change payloadLen
-				var paylen int16 = 0
-				paylen |= int16(b[7])
-				paylen |= int16(b[6]) << 8
-				log.Info("PAYLEN BEFORE", "pay", paylen)
-				paylen += int16(nhbhBytes)
-				log.Info("PAYLEN after", "pay", paylen)
-				b[6] = byte(paylen >> 8)
-				b[7] = byte(paylen)
-				dumpByteSlice(b)
-			}
-
-			//nhbh.Options = append(nhbh.Options, hbhLayer.Options...)
-			//scionLayer.NextHdr = common.HopByHopClass
-			//layers := []gopacket.SerializableLayer{&scionLayer, nhbh, &e2eLayer, &udpLayer}
-			//
-			//buf := gopacket.NewSerializeBuffer()
-			//opts := gopacket.SerializeOptions{FixLengths: true}
-			//err := gopacket.SerializeLayers(buf, opts, layers...)
-			//if err != nil {
-			//	log.Info("Failed to serialize new packet", "err", err)
-			//} else {
-			//	b = buf.Bytes()
-			//}
-
 		}
 	}
 
@@ -384,14 +525,53 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 		n, err = c.conn.WriteTo(b, dst)
 	}
 
-	//if err2 := sockctrl.SockControl(c.conn, func(fd int) error {
-	//	return readTxTimestamp(fd, c)
-	//}); err2 != nil {
-	//	//log.Info("Failed to read TX timestamp", "err", err2)
-	//}
+	if len(idstr) > 0 {
+		_ = sockctrl.SockControl(c.conn, func(fd int) error {
+			return readTxTimestamp(fd, c, isOrigin, idstr)
+		})
+	}
 
 	return n, err
 	//return c.conn.WriteTo(b, dst)
+}
+
+func int64ToByteSlice(n int64, b []byte) {
+	for i := 0; i < 8; i++ {
+		b[7-i] = byte(n >> i)
+	}
+}
+
+func writeFields(w io.Writer, fields ...interface{}) bool {
+	for _, f := range fields {
+		if err := binary.Write(w, binary.LittleEndian, f); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// Uniquely identifies the path based on the sequence of ASes and BRs and additionally
+// the source and destination addresses. This should uniquely identify a complete path
+// from SIG to SIG
+func ExtFingerprint(scionLayer *slayers.SCION) ([]byte, bool) {
+	path, ok := scionLayer.Path.(*scion.Raw)
+	if !ok {
+		return nil, false
+	}
+	h := sha1.New()
+	for i := 0; i < path.NumHops; i++ {
+		hf, err := path.GetHopField(i)
+		if err != nil {
+			return nil, false
+		}
+		if !writeFields(h, hf.ConsEgress, hf.ConsIngress) {
+			return nil, false
+		}
+	}
+	if !writeFields(h, scionLayer.RawSrcAddr, scionLayer.RawDstAddr, scionLayer.SrcIA, scionLayer.DstIA) {
+		return nil, false
+	}
+	return h.Sum(nil), true
 }
 
 func dumpByteSlice(b []byte) {
@@ -422,7 +602,7 @@ func dumpByteSlice(b []byte) {
 // We absolutely dont care about the actual data so we dont mind it being weirdly overwritten
 var txbuff = make([]byte, 1<<16)
 
-func readTxTimestamp(fd int, c *connUDPBase) error {
+func readTxTimestamp(fd int, c *connUDPBase, isOrigin bool, pathId string) error {
 	const timeout = 1 //ms
 	const maxTries = 3
 
@@ -441,19 +621,18 @@ func readTxTimestamp(fd int, c *connUDPBase) error {
 			continue
 		}
 
+		// TODO (daniele): Potentially use goTime as backup
 		kTime, err := parseOOB(c.txOob[:oobn])
 		if err != nil {
 			log.Info("Couldn't parse OOB data", "err", err)
 			continue
 		}
 
-		// TODO (daniele): Potentially use goTime as backup
-		var offset int64 = 0
-		if !c.prevIngTs.IsZero() {
-			offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+		offsets.addOrUpdateEgressTime(kTime, pathId)
+		// Very ugly hack to fix the current PoC SIG not having any ingress packets
+		if isOrigin {
+			offsets.addOrUpdateIngressTimeOrigin(kTime, pathId)
 		}
-
-		log.Info("Writing Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 		return nil
 	}
 	return nil
@@ -512,61 +691,6 @@ func byteToTime(data []byte) (time.Time, error) {
 
 }
 
-// Deprecated: Only worked with SO_TIMESTAMPNS. Under investigation
-func handleOOB(oob []byte) (time.Time, error) {
-	sizeofCmsgHdr := syscall.CmsgLen(0)
-
-	for sizeofCmsgHdr <= len(oob) {
-		hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
-		if hdr.Len < syscall.SizeofCmsghdr {
-			return time.Time{}, serrors.New("Cmsg from ReadBatch has corrupted header length",
-				"min", syscall.SizeofCmsghdr, "actual", hdr.Len)
-		}
-		if hdr.Len > uint64(len(oob)) {
-			return time.Time{}, serrors.New("Cmsg from ReadBath longer than remaining buffer",
-				"max", len(oob), "actual", hdr.Len)
-		}
-		if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
-			tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-			return time.Unix(tv.Sec, tv.Nsec), nil
-		}
-		// What we actually want is the padded length of the cmsg, but CmsgLen
-		// adds a CmsgHdr length to the result, so we subtract that.
-		oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
-	}
-	return time.Time{}, nil
-}
-
-// Read and parse OOB data
-// Deprecated: Only worked with SO_TIMESTAMPNS. Under investigation
-func handleOOBBatch(msgs Messages, timestamps []time.Time) (int, error) {
-	sizeofCmsgHdr := syscall.CmsgLen(0)
-	parsedOOBs := 0
-	for _, msg := range msgs {
-		oob := msg.OOB[:msg.NN]
-		for sizeofCmsgHdr <= len(oob) {
-			hdr := (*syscall.Cmsghdr)(unsafe.Pointer(&oob[0]))
-			if hdr.Len < syscall.SizeofCmsghdr {
-				return parsedOOBs, serrors.New("Cmsg from ReadBatch has corrupted header length",
-					"min", syscall.SizeofCmsghdr, "actual", hdr.Len)
-			}
-			if hdr.Len > uint64(len(oob)) {
-				return parsedOOBs, serrors.New("Cmsg from ReadBath longer than remaining buffer",
-					"max", len(oob), "actual", hdr.Len)
-			}
-			if hdr.Level == syscall.SOL_SOCKET && hdr.Type == syscall.SO_TIMESTAMPNS {
-				tv := *(*syscall.Timespec)(unsafe.Pointer(&oob[sizeofCmsgHdr]))
-				timestamps[parsedOOBs] = time.Unix(tv.Sec, tv.Nsec)
-				parsedOOBs++
-			}
-			// What we actually want is the padded length of the cmsg, but CmsgLen
-			// adds a CmsgHdr length to the result, so we subtract that.
-			oob = oob[syscall.CmsgLen(int(hdr.Len))-sizeofCmsgHdr:]
-		}
-	}
-	return parsedOOBs, nil
-}
-
 // decodeLayers implements roughly the functionality of
 // gopacket.DecodingLayerParser, but customized to our use case with a "base"
 // layer and additional, optional layers in the given order.
@@ -588,6 +712,57 @@ func decodeLayers(data []byte, base gopacket.DecodingLayer,
 		}
 	}
 	return last, nil
+}
+
+func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
+	if od, ok := m[key]; ok {
+		od.prevEgrTs = ts
+	} else {
+		m[key] = &pathOffsetData{
+			prevEgrTs:   ts,
+			penultIngTs: time.Time{},
+			prevIngTs:   time.Time{},
+			counter:     0,
+		}
+	}
+}
+
+func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
+	if od, ok := m[key]; ok {
+		od.penultIngTs = od.prevIngTs
+		od.prevIngTs = ts
+	} else {
+		m[key] = &pathOffsetData{
+			prevIngTs:   ts,
+			counter:     0,
+			prevEgrTs:   time.Time{},
+			penultIngTs: time.Time{},
+		}
+	}
+}
+
+func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
+	if od, ok := m[key]; ok {
+		od.penultIngTs = ts
+		od.prevIngTs = ts
+	} else {
+		m[key] = &pathOffsetData{
+			prevIngTs:   ts,
+			penultIngTs: ts,
+			prevEgrTs:   time.Time{},
+			counter:     0,
+		}
+	}
+}
+
+func (data hbhoffset) parseOffsetHeaderData() (offset int64, id []byte) {
+	id = data[8:]
+	// parse int
+	for i := 0; i < 8; i++ {
+		offset |= int64(data[7-i]) << i
+	}
+
+	return offset, id
 }
 
 func (c *connUDPBase) LocalAddr() *net.UDPAddr {
