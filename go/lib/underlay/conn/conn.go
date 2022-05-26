@@ -121,12 +121,12 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		kTime = goTime // Use go time as backup
 		log.Info("Used Go time as backup")
 	}
-	var offset int64 = 0
-	if !c.prevIngTs.IsZero() {
-		offset = kTime.Sub(c.prevIngTs).Nanoseconds()
-	}
+	//var offset int64 = 0
+	//if !c.prevIngTs.IsZero() {
+	//	offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+	//}
 	c.prevIngTs = kTime
-	log.Info("Reading Packet Batch TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
+	//log.Info("Reading Packet Batch TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 
 	return 1, err
 }
@@ -279,20 +279,20 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			kTime = goTime // Use go time as backup
 			log.Info("Used Go time as backup")
 		}
-		var offset int64 = 0
-		if !c.prevIngTs.IsZero() {
-			offset = kTime.Sub(c.prevIngTs).Nanoseconds()
-		}
+		//var offset int64 = 0
+		//if !c.prevIngTs.IsZero() {
+		//	offset = kTime.Sub(c.prevIngTs).Nanoseconds()
+		//}
 		c.prevIngTs = kTime
-		log.Info("Reading Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
+		//log.Info("Reading Packet TS: ", "kernel ts", kTime.UnixNano(), "offset", offset)
 	}
 
-	_, err = decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
-	if err == nil {
-		if data := string(udpLayer.Payload); data == "Hello, world!" {
-			log.Info(fmt.Sprintf("Reading packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
-		}
-	}
+	//_, err = decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
+	//if err == nil {
+	//	if data := string(udpLayer.Payload); data == "Hello, world!" {
+	//		log.Info(fmt.Sprintf("Reading packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
+	//	}
+	//}
 
 	return n, src, err
 	//return c.conn.ReadFromUDP(b)
@@ -303,13 +303,13 @@ func (c *connUDPBase) Write(b []byte) (int, error) {
 }
 
 var optX = slayers.HopByHopOption{
-	OptType:  0x1e,
+	OptType:  0xFD, // Experimental testing
 	OptData:  []byte{0xaa, 0xaa, 0xaa, 0xaa, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb},
 	OptAlign: [2]uint8{8, 2},
 }
 
 func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
-	_, err := decodeLayers(b, &scionLayer, &hbhLayer, &e2eLayer, &udpLayer)
+	lastlayer, err := decodeLayers(b, &scionLayer, &udpLayer)
 	if err == nil {
 		if data := string(udpLayer.Payload); data == "Hello, world!" {
 			log.Info(fmt.Sprintf("Writing packet: %v -> %v : \"%v\"", udpLayer.SrcPort, udpLayer.DstPort, data))
@@ -317,43 +317,48 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 			log.Info("Packet lengths",
 				"byte stream", len(b),
 				"scion hdr", scionLayer.HdrLen,
+				"scion dest", scionLayer.DstAddrLen,
+				"scion src", scionLayer.SrcAddrLen,
+				"scion path", scionLayer.Path.Len(),
 				"scion pay", scionLayer.PayloadLen,
-				"hbh act", hbhLayer.ActualLen,
-				"hbh ext", hbhLayer.ExtLen,
-				"e2e act", e2eLayer.ActualLen,
-				"e2e ext", e2eLayer.ExtLen,
-				"udp", udpLayer.Length)
+				"udp", udpLayer.Length,
+				"lastlayer", len(lastlayer.LayerPayload()))
+
+			dumpByteSlice(b)
 
 			nhbh := &slayers.HopByHopExtn{}
 			nhbh.NextHdr = common.L4UDP
 			nhbh.Options = []*slayers.HopByHopOption{
 				(*slayers.HopByHopOption)(&optX),
 			}
-			cut := len(b) - int(udpLayer.Length)
+			udpCutoff := len(b) - int(udpLayer.Length)
 			buf := gopacket.NewSerializeBuffer()
 			opts := gopacket.SerializeOptions{FixLengths: true}
 			err := nhbh.SerializeTo(buf, opts)
 			if err != nil {
 				log.Info("Failed to serialize new hbh ext", "err", err)
 			} else {
-				u := b[cut:]
-				bufb := buf.Bytes()
-				scionLayer.PayloadLen = scionLayer.PayloadLen + uint16(len(bufb))
-				scionLayer.NextHdr = common.HopByHopClass
-				buf2 := gopacket.NewSerializeBuffer()
-				buf2b := buf2.Bytes()
-				err := scionLayer.SerializeTo(buf2, opts)
-				if err != nil {
-					log.Info("Failed to serialize scion header", "err", err)
-				} else {
-					b = append(buf2b, append(b[len(buf2b):cut], append(bufb, u...)...)...)
-					log.Info("New Lengths",
-						"byte", len(b),
-						"scion hdr", scionLayer.HdrLen,
-						"scion pay", scionLayer.PayloadLen,
-						"hbh act", nhbh.ActualLen,
-						"hbh ext", nhbh.ExtLen)
-				}
+				udpBytes := make([]byte, udpLayer.Length)
+				copy(udpBytes, b[udpCutoff:])
+				restBytes := b[:udpCutoff]
+				hbhBytes := buf.Bytes()
+				nhbhBytes := len(buf.Bytes())
+				// construct new byte slice
+				b = append(restBytes, hbhBytes...)
+				b = append(b, udpBytes...)
+				// Fix Scion header values
+				// Change next Header
+				b[4] = byte(common.HopByHopClass)
+				// Change payloadLen
+				var paylen int16 = 0
+				paylen |= int16(b[7])
+				paylen |= int16(b[6]) << 8
+				log.Info("PAYLEN BEFORE", "pay", paylen)
+				paylen += int16(nhbhBytes)
+				log.Info("PAYLEN after", "pay", paylen)
+				b[6] = byte(paylen >> 8)
+				b[7] = byte(paylen)
+				dumpByteSlice(b)
 			}
 
 			//nhbh.Options = append(nhbh.Options, hbhLayer.Options...)
@@ -379,14 +384,39 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 		n, err = c.conn.WriteTo(b, dst)
 	}
 
-	if err2 := sockctrl.SockControl(c.conn, func(fd int) error {
-		return readTxTimestamp(fd, c)
-	}); err2 != nil {
-		//log.Info("Failed to read TX timestamp", "err", err2)
-	}
+	//if err2 := sockctrl.SockControl(c.conn, func(fd int) error {
+	//	return readTxTimestamp(fd, c)
+	//}); err2 != nil {
+	//	//log.Info("Failed to read TX timestamp", "err", err2)
+	//}
 
 	return n, err
 	//return c.conn.WriteTo(b, dst)
+}
+
+func dumpByteSlice(b []byte) {
+	var a [4]byte
+	n := (len(b) + 3) &^ 3
+	for i := 0; i < n; i++ {
+		if i%4 == 0 {
+			fmt.Printf("%4d", i)
+		}
+		if i < len(b) {
+			fmt.Printf(" %02X", b[i])
+		} else {
+			fmt.Print("   ")
+		}
+		if i >= len(b) {
+			a[i%4] = ' '
+		} else if b[i] < 32 || b[i] > 126 {
+			a[i%4] = '.'
+		} else {
+			a[i%4] = b[i]
+		}
+		if i%4 == 3 {
+			fmt.Printf("  %s\n", string(a[:]))
+		}
+	}
 }
 
 // We absolutely dont care about the actual data so we dont mind it being weirdly overwritten
