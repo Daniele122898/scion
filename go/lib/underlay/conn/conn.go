@@ -537,7 +537,7 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 
 func int64ToByteSlice(n int64, b []byte) {
 	for i := 0; i < 8; i++ {
-		b[7-i] = byte(n >> i)
+		b[7-i] = byte(n >> (8 * i))
 	}
 }
 
@@ -755,13 +755,22 @@ func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
 	}
 }
 
+func byteSliceToInt64(b []byte) (int64, bool) {
+	if len(b) < 8 {
+		return 0, false
+	}
+
+	var val int64 = 0
+	for i := 0; i < 8; i++ {
+		val |= int64(b[7-i]) << (8 * i)
+	}
+	return val, true
+}
+
 func (data hbhoffset) parseOffsetHeaderData() (offset int64, id []byte) {
 	id = data[8:]
 	// parse int
-	for i := 0; i < 8; i++ {
-		offset |= int64(data[7-i]) << i
-	}
-
+	offset, _ = byteSliceToInt64(data[:8])
 	return offset, id
 }
 
