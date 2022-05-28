@@ -72,7 +72,7 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			pathId := string(id)
 			if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() {
 				offset = kTime.Sub(od.prevIngTs).Nanoseconds()
-				//offset = normalize(offset)
+				offset = normalize(offset)
 			}
 
 			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
@@ -138,7 +138,7 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 
 				if od, ok := tsDataMap[idstr]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 					offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
-					//offset = normalize(offset)
+					offset = normalize(offset)
 				}
 
 				// Testing offset

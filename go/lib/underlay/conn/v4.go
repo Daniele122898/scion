@@ -64,7 +64,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		var offset int64 = 0
 		if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() {
 			offset = kTime.Sub(od.prevIngTs).Nanoseconds()
-			//offset = normalize(offset)
+			offset = normalize(offset)
 		}
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
@@ -126,7 +126,7 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
-			//offset = normalize(offset)
+			offset = normalize(offset)
 		}
 		log.Info("======== Write Batch TS: \n",
 			"id", pathId,
