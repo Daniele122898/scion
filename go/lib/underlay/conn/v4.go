@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"fmt"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
 	"github.com/scionproto/scion/go/lib/sockctrl"
@@ -41,15 +42,20 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	var (
 		scionLayer slayers.SCION
 		hbhLayer   slayers.HopByHopExtn
+		udpLayer   slayers.UDP
 	)
 
-	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer, &udpLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+		pknr, _ := byteSliceToInt32(udpLayer.Payload)
+		log.Info(fmt.Sprintf("============================================== READB PACKET %d", pknr))
 
 		kTime, err2 := parseOOB(c.txOob[:oobn])
 		if err2 != nil {
 			kTime = goTime // Use go time as backup
 			log.Info("Used Go time as backup")
 		}
+		log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
+		//kTime = goTime
 		op := hbhLayer.Options[0]
 		offsetData := hbhoffset(op.OptData)
 		offsetHeader, id := offsetData.parseOffsetHeaderData()
@@ -58,11 +64,21 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		var offset int64 = 0
 		if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() {
 			offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+			//offset = normalize(offset)
 		}
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 
 		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
+		if od, ok := tsDataMap[pathId]; ok {
+			log.Info("=========== Read Batch Data",
+				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
+				"last", od.prevIngTs.UnixNano(),
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
+		}
 
 		log.Info("======== Reading Batch TS: \n",
 			"id", pathId,
@@ -83,11 +99,15 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		var (
 			scionLayer slayers.SCION
 			hbhLayer   slayers.HopByHopExtn
+			udpLayer   slayers.UDP
 		)
 
-		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer); err2 != nil || hbhLayer.ExtLen != 7 {
+		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer, &udpLayer); err2 != nil || hbhLayer.ExtLen != 7 {
 			continue
 		}
+		pknr, _ := byteSliceToInt32(udpLayer.Payload)
+		log.Info(fmt.Sprintf("============================================== WRITEB PACKET %d", pknr))
+		isOrigin := hbhLayer.ExtLen == 0
 		// TODO (daniele): Check for the correct option type
 		op := hbhLayer.Options[0]
 		offsetData := hbhoffset(op.OptData)
@@ -106,9 +126,11 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+			//offset = normalize(offset)
 		}
 		log.Info("======== Write Batch TS: \n",
 			"id", pathId,
+			"isOrigin", isOrigin,
 			"offset", offset,
 			"headoff", offsetHeader,
 			"delta", abs(offsetHeader-offset),

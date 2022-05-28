@@ -20,10 +20,10 @@
 package conn
 
 import (
+	"fmt"
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"net"
 	"time"
 
@@ -49,9 +49,11 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 		var (
 			scionLayer slayers.SCION
 			hbhLayer   slayers.HopByHopExtn
+			udpLayer   slayers.UDP
 		)
-		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
-
+		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer, &udpLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+			pknr, _ := byteSliceToInt32(udpLayer.Payload)
+			log.Info(fmt.Sprintf("============================================== READF PACKET %d \n", pknr))
 			// TODO (daniele): Check for the correct option type
 			op := hbhLayer.Options[0]
 			offsetData := hbhoffset(op.OptData)
@@ -63,11 +65,14 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 				kTime = goTime // Use go time as backup
 				log.Info("Used Go time as backup")
 			}
+			log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
+			//kTime = goTime
 
 			var offset int64 = 0
 			pathId := string(id)
 			if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() {
 				offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+				//offset = normalize(offset)
 			}
 
 			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
@@ -106,30 +111,15 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	// uses the dispatchers write function and never first reads. Thus technically
 	// never reading and thus never creating prevIng Timestamps. For our PoC testing,
 	// i'll hack in that we use our egress timestamps as prev and penultimate timestamps.
-	isOrigin := hbhLayer.ExtLen > 0
+	isOrigin := hbhLayer.ExtLen == 0
 	var idstr string
 	if err == nil {
-		if data := string(udpLayer.Payload); data == "Hello, world!" {
-			log.Info("PACKET DETAILS HELLO WORLD",
-				"path type", scionLayer.PathType,
-				"raw dest", scionLayer.RawDstAddr,
-				"raw source", scionLayer.RawSrcAddr,
-				"traffic class", scionLayer.TrafficClass,
-				"header len", scionLayer.HdrLen,
-				"payload len", scionLayer.PayloadLen)
-		} else {
-			log.Info("PACKET DETAILS",
-				"path type", scionLayer.PathType,
-				"raw dest", scionLayer.RawDstAddr,
-				"raw source", scionLayer.RawSrcAddr,
-				"traffic class", scionLayer.TrafficClass,
-				"header len", scionLayer.HdrLen,
-				"payload len", scionLayer.PayloadLen)
-		}
-
 		if id, ok := ExtFingerprint(&scionLayer); ok {
-			if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
-				//if data := string(udpLayer.Payload); data == "Hello, world!" {
+			//if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
+			//if data := string(udpLayer.Payload); data == "Hello, world!" {
+			if len(udpLayer.Payload) == 4 {
+				pknr, _ := byteSliceToInt32(udpLayer.Payload)
+				log.Info(fmt.Sprintf("============================================== WRITE PACKET %d", pknr))
 
 				idstr = string(id)
 
@@ -139,12 +129,16 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 				if od, ok := tsDataMap[idstr]; ok {
 					log.Info("=========== Writer Data",
 						"penult", od.penultIngTs.UnixNano(),
+						"penult zero", od.penultIngTs.IsZero(),
 						"last", od.prevIngTs.UnixNano(),
-						"egre", od.prevEgrTs.UnixNano())
+						"last zero", od.prevIngTs.IsZero(),
+						"egre", od.prevEgrTs.UnixNano(),
+						"egre zero", od.prevEgrTs.IsZero())
 				}
 
 				if od, ok := tsDataMap[idstr]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 					offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+					//offset = normalize(offset)
 				}
 
 				// Testing offset

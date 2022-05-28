@@ -1,7 +1,6 @@
 package conn
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
@@ -34,9 +33,46 @@ func abs(x int64) int64 {
 	return x
 }
 
+func byteSliceToInt64(b []byte) (int64, bool) {
+	if len(b) < 8 {
+		return 0, false
+	}
+
+	var val int64 = 0
+	for i := 0; i < 8; i++ {
+		val |= int64(b[7-i]) << (8 * i)
+	}
+	return val, true
+}
+
+func byteSliceToInt32(b []byte) (int32, bool) {
+	if len(b) < 4 {
+		return 0, false
+	}
+
+	var val int32 = 0
+	for i := 0; i < 4; i++ {
+		val |= int32(b[3-i]) << (8 * i)
+	}
+	return val, true
+}
+
+func (data hbhoffset) parseOffsetHeaderData() (offset int64, id []byte) {
+	id = data[8:]
+	// parse int
+	offset, _ = byteSliceToInt64(data[:8])
+	return offset, id
+}
+
 func int64ToByteSlice(n int64, b []byte) {
 	for i := 0; i < 8; i++ {
 		b[7-i] = byte(n >> (8 * i))
+	}
+}
+
+func int32ToByteSlice(n int32, b []byte) {
+	for i := 0; i < 4; i++ {
+		b[3-i] = byte(n >> (8 * i))
 	}
 }
 
@@ -119,13 +155,13 @@ func readTxTimestamp(fd int, c *connUDPBase, isOrigin bool, pathId string) error
 			log.Info("Couldn't find error msg", "err", err)
 			continue
 		}
-
 		// TODO (daniele): Potentially use goTime as backup
 		kTime, err := parseOOB(c.txOob[:oobn])
 		if err != nil {
 			log.Info("Couldn't parse OOB data", "err", err)
 			continue
 		}
+		//kTime = time.Now()
 
 		tsDataMap.addOrUpdateEgressTime(kTime, pathId)
 		// Very ugly hack to fix the current PoC SIG not having any ingress packets
@@ -137,7 +173,20 @@ func readTxTimestamp(fd int, c *connUDPBase, isOrigin bool, pathId string) error
 	return nil
 }
 
+func normalize(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
 func parseOOB(oob []byte) (time.Time, error) {
+
+	// Check if this is less confused than SW timestamps
+	//ts := time.Now()
+	//log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
+	//return ts, nil
+
 	if len(oob) == 0 {
 		return time.Time{}, serrors.New("Cant parse OOB as len is 0")
 	}
@@ -149,14 +198,17 @@ func parseOOB(oob []byte) (time.Time, error) {
 
 	var kTime time.Time
 	for _, msg := range msgs {
+		log.Info("OOB HEADER VALUE: ", "lvl", msg.Header.Level, "type", msg.Header.Type)
 		if msg.Header.Level != unix.SOL_SOCKET ||
 			(msg.Header.Type != unix.SO_TIMESTAMPING && msg.Header.Type != unix.SO_TIMESTAMPING_NEW) {
 			continue
 		}
+		dumpByteSlice(msg.Data)
 		ts, err := scmDataToTime(msg.Data)
 		if err != nil {
 			return time.Time{}, err
 		}
+		log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
 		if ts.UnixNano() != 0 {
 			kTime = ts
 		}
@@ -181,13 +233,15 @@ func scmDataToTime(data []byte) (kts time.Time, err error) {
 
 // byteToTime converts LittleEndian bytes into a timestamp
 func byteToTime(data []byte) (time.Time, error) {
-	ts := &unix.Timespec{}
-	b := bytes.NewReader(data)
-	if err := binary.Read(b, binary.LittleEndian, ts); err != nil {
-		return time.Time{}, err
-	}
-	return time.Unix(ts.Unix()), nil
-
+	//ts := &unix.Timespec{}
+	//b := bytes.NewReader(data)
+	//if err := binary.Read(b, binary.LittleEndian, ts); err != nil {
+	//	return time.Time{}, err
+	//}
+	//return time.Unix(ts.Unix()), nil
+	sec := int64(binary.LittleEndian.Uint64(data[0:8]))
+	nsec := int64(binary.LittleEndian.Uint64(data[8:]))
+	return time.Unix(sec, nsec), nil
 }
 
 // decodeLayers implements roughly the functionality of
@@ -252,23 +306,4 @@ func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
 			counter:     0,
 		}
 	}
-}
-
-func byteSliceToInt64(b []byte) (int64, bool) {
-	if len(b) < 8 {
-		return 0, false
-	}
-
-	var val int64 = 0
-	for i := 0; i < 8; i++ {
-		val |= int64(b[7-i]) << (8 * i)
-	}
-	return val, true
-}
-
-func (data hbhoffset) parseOffsetHeaderData() (offset int64, id []byte) {
-	id = data[8:]
-	// parse int
-	offset, _ = byteSliceToInt64(data[:8])
-	return offset, id
 }
