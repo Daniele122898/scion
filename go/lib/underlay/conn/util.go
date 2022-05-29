@@ -10,6 +10,7 @@ import (
 	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"golang.org/x/sys/unix"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type pathOffsetData struct {
 type offsetMap map[string]*pathOffsetData
 
 var tsDataMap offsetMap = make(map[string]*pathOffsetData)
+var mapLock sync.Mutex
 
 // Go only has builtin abs function for float64 :)
 func abs(x int64) int64 {
@@ -108,6 +110,45 @@ func ExtFingerprint(scionLayer *slayers.SCION) ([]byte, bool) {
 	return h.Sum(nil), true
 }
 
+func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId string) {
+	od, ok := tsDataMap[pathId]
+	if !ok || headerOffset == 0 {
+		return
+	}
+
+	mapLock.Lock()
+	defer mapLock.Unlock()
+	delta := headerOffset - measuredOffset
+	if delta > offsetThresh {
+		// Potential Queueing Delay
+		od.counter += 1
+		if od.counter >= counterThresh {
+			od.counter = 0
+			log.Info("================================================== ALERT")
+			log.Info("Potential Queueing Delay",
+				"delta", delta,
+				"headerOffset", headerOffset,
+				"measuredOffset", measuredOffset)
+		}
+	} else if delta < -offsetThresh {
+		// Potential Link health degradation
+		od.counter += 1
+		if od.counter >= counterThresh {
+			od.counter = 0
+			log.Info("================================================== ALERT")
+			log.Info("Potential Link Health Degradation",
+				"delta", delta,
+				"headerOffset", headerOffset,
+				"measuredOffset", measuredOffset)
+		}
+	} else {
+		// Everything is fine
+		if od.counter > 0 {
+			od.counter -= 1
+		}
+	}
+}
+
 func dumpByteSlice(b []byte) {
 	var a [4]byte
 	n := (len(b) + 3) &^ 3
@@ -135,6 +176,23 @@ func dumpByteSlice(b []byte) {
 
 // We absolutely dont care about the actual data so we dont mind it being weirdly overwritten
 var txbuff = make([]byte, 1<<16)
+
+// Temporary function until we get SW TS to work
+func getGoTxTimestamp(isOrigin bool, pathId string) {
+	kTime, err := parseOOB(nil)
+	if err != nil {
+		log.Info("Couldn't parse OOB data", "err", err)
+		return
+	}
+
+	//kTime = time.Now()
+
+	tsDataMap.addOrUpdateEgressTime(kTime, pathId)
+	// Very ugly hack to fix the current PoC SIG not having any ingress packets
+	if isOrigin {
+		tsDataMap.addOrUpdateIngressTimeOrigin(kTime, pathId)
+	}
+}
 
 func readTxTimestamp(fd int, c *connUDPBase, isOrigin bool, pathId string) error {
 	const timeout = 1 //ms
@@ -267,6 +325,8 @@ func decodeLayers(data []byte, base gopacket.DecodingLayer,
 }
 
 func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
+	mapLock.Lock()
+	defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
 		od.prevEgrTs = ts
 	} else {
@@ -280,6 +340,8 @@ func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
 }
 
 func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
+	mapLock.Lock()
+	defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
 		od.penultIngTs = od.prevIngTs
 		od.prevIngTs = ts
@@ -294,6 +356,8 @@ func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
 }
 
 func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
+	mapLock.Lock()
+	defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
 		od.penultIngTs = ts
 		od.prevIngTs = ts

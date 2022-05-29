@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/sockctrl"
 	"golang.org/x/net/ipv4"
 	"net"
 	"time"
@@ -29,7 +28,8 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 // ReadBatch reads up to len(msgs) packets, and stores them in msgs.
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
-	n, oobn, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
+
+	n, _, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
 	if n == 0 || err != nil {
 		return 0, err
 	}
@@ -37,23 +37,22 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	msgs[0].N = n
 	msgs[0].Addr = src
 
-	goTime := time.Now()
+	kTime := time.Now()
 
 	var (
 		scionLayer slayers.SCION
 		hbhLayer   slayers.HopByHopExtn
-		udpLayer   slayers.UDP
 	)
 
-	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer, &udpLayer); err2 == nil && hbhLayer.ExtLen == 7 {
-		pknr, _ := byteSliceToInt32(udpLayer.Payload)
-		log.Info(fmt.Sprintf("============================================== READB PACKET %d", pknr))
+	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+		log.Info(fmt.Sprintf("============================================== READB PACKET"))
 
-		kTime, err2 := parseOOB(c.txOob[:oobn])
-		if err2 != nil {
-			kTime = goTime // Use go time as backup
-			log.Info("Used Go time as backup")
-		}
+		// TODO (daniele): Re-Add after SW TS are fixed
+		//kTime, err2 := parseOOB(c.txOob[:oobn])
+		//if err2 != nil {
+		//	kTime = goTime // Use go time as backup
+		//	log.Info("Used Go time as backup")
+		//}
 		log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
 		//kTime = goTime
 		op := hbhLayer.Options[0]
@@ -66,10 +65,11 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 			offset = kTime.Sub(od.prevIngTs).Nanoseconds()
 			offset = normalize(offset)
 		}
+		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
+		checkOffsetConditions(offsetHeader, offset, pathId)
 
-		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 		if od, ok := tsDataMap[pathId]; ok {
 			log.Info("=========== Read Batch Data",
 				"penult", od.penultIngTs.UnixNano(),
@@ -99,14 +99,12 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		var (
 			scionLayer slayers.SCION
 			hbhLayer   slayers.HopByHopExtn
-			udpLayer   slayers.UDP
 		)
 
-		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer, &udpLayer); err2 != nil || hbhLayer.ExtLen != 7 {
+		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer); err2 != nil || hbhLayer.ExtLen != 7 {
 			continue
 		}
-		pknr, _ := byteSliceToInt32(udpLayer.Payload)
-		log.Info(fmt.Sprintf("============================================== WRITEB PACKET %d", pknr))
+		log.Info(fmt.Sprintf("============================================== WRITEB PACKET"))
 		isOrigin := hbhLayer.ExtLen == 0
 		// TODO (daniele): Check for the correct option type
 		op := hbhLayer.Options[0]
@@ -128,6 +126,10 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
 			offset = normalize(offset)
 		}
+
+		// TODO (daniele): Remove this temporary measure
+		getGoTxTimestamp(isOrigin, pathId)
+
 		log.Info("======== Write Batch TS: \n",
 			"id", pathId,
 			"isOrigin", isOrigin,
@@ -139,6 +141,9 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		// TODO (daniele): Check against header offset for anomalities
 
 		// Write our own offset data into it
+		// This builds on the assumption that the WriteBatch function is mostly called in BR
+		// while the usual dispatching happens using the WriteTo functions. This can be easily changed
+		// by just adopting the code of the WriteTo function but for now this assumption works.
 		buf := msgs[i].Buffers[0]
 		//dumpByteSlice(buf)
 		actScionHdrLen := scionLayer.HdrLen * 4
@@ -150,11 +155,11 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 	}
 	n, err := c.pconn.WriteBatch(msgs, flags)
 
-	if len(pathId) > 0 {
-		_ = sockctrl.SockControl(c.conn, func(fd int) error {
-			return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
-		})
-	}
+	//if len(pathId) > 0 {
+	//	_ = sockctrl.SockControl(c.conn, func(fd int) error {
+	//		return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
+	//	})
+	//}
 
 	return n, err
 
