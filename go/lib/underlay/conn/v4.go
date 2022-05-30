@@ -95,7 +95,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 	var pathId string
-	for i, _ := range msgs {
+	for i := range msgs {
 		var (
 			scionLayer slayers.SCION
 			hbhLayer   slayers.HopByHopExtn
