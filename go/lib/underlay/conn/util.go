@@ -179,13 +179,7 @@ var txbuff = make([]byte, 1<<16)
 
 // Temporary function until we get SW TS to work
 func getGoTxTimestamp(isOrigin bool, pathId string) {
-	kTime, err := parseOOB(nil)
-	if err != nil {
-		log.Info("Couldn't parse OOB data", "err", err)
-		return
-	}
-
-	//kTime = time.Now()
+	kTime := time.Now()
 
 	tsDataMap.addOrUpdateEgressTime(kTime, pathId)
 	// Very ugly hack to fix the current PoC SIG not having any ingress packets

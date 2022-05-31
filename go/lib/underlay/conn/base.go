@@ -24,7 +24,6 @@ import (
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"net"
 	"time"
 
@@ -116,8 +115,8 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	var pathId string
 	if err == nil {
 		if id, ok := ExtFingerprint(&scionLayer); ok {
-			if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
-				//if data := string(udpLayer.Payload); data == "Hello, world!" {
+			// if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
+			if data := string(udpLayer.Payload); data == "Hello, world!" {
 				//if len(udpLayer.Payload) == 4 {
 				pknr, _ := byteSliceToInt32(udpLayer.Payload)
 				log.Info(fmt.Sprintf("============================================== WRITE PACKET %d", pknr))
