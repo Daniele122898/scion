@@ -95,6 +95,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 	var pathId string
+	isOrigin := false
 	for i := range msgs {
 		var (
 			scionLayer slayers.SCION
@@ -105,7 +106,7 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 			continue
 		}
 		log.Info(fmt.Sprintf("============================================== WRITEB PACKET"))
-		isOrigin := hbhLayer.ExtLen == 0
+		isOrigin = hbhLayer.ExtLen == 0
 		// TODO (daniele): Check for the correct option type
 		op := hbhLayer.Options[0]
 		offsetData := hbhoffset(op.OptData)
@@ -126,9 +127,6 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
 			offset = normalize(offset)
 		}
-
-		// TODO (daniele): Remove this temporary measure
-		getGoTxTimestamp(isOrigin, pathId)
 
 		log.Info("======== Write Batch TS: \n",
 			"id", pathId,
@@ -154,6 +152,9 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 	}
 	n, err := c.pconn.WriteBatch(msgs, flags)
+
+	// TODO (daniele): Remove this temporary measure
+	getGoTxTimestamp(isOrigin, pathId)
 
 	//if len(pathId) > 0 {
 	//	_ = sockctrl.SockControl(c.conn, func(fd int) error {

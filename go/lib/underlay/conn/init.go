@@ -16,8 +16,8 @@ import (
 const sizeOfTimespec = int(unsafe.Sizeof(syscall.Timespec{}))
 
 var oobSize = syscall.CmsgSpace(sizeOfTimespec)
-var offsetThresh int64 = 2000000 // 2 ms of difference is fine
-var counterThresh uint8 = 20
+var offsetThresh int64 = 1500000 // 2 ms of difference is fine
+var counterThresh uint8 = 5
 
 //var oobSize = 128
 

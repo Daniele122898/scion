@@ -140,8 +140,6 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 					offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
 					offset = normalize(offset)
 				}
-				// TODO (daniele): Remove this temporary measure
-				getGoTxTimestamp(isOrigin, pathId)
 
 				// Testing offset
 
@@ -209,6 +207,9 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	//		return readTxTimestamp(fd, c, isOrigin, pathId)
 	//	})
 	//}
+
+	// TODO (daniele): Remove this temporary measure
+	getGoTxTimestamp(isOrigin, pathId)
 
 	return n, err
 	//return c.conn.WriteTo(b, dst)

@@ -184,7 +184,8 @@ func getGoTxTimestamp(isOrigin bool, pathId string) {
 	tsDataMap.addOrUpdateEgressTime(kTime, pathId)
 	// Very ugly hack to fix the current PoC SIG not having any ingress packets
 	if isOrigin {
-		tsDataMap.addOrUpdateIngressTimeOrigin(kTime, pathId)
+		// tsDataMap.addOrUpdateIngressTimeOrigin(kTime, pathId)
+		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 	}
 }
 
