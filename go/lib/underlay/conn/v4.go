@@ -61,8 +61,8 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		pathId := string(id)
 
 		var offset int64 = 0
-		if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() {
-			offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
+			offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
 			offset = normalize(offset)
 		}
 		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
@@ -123,8 +123,8 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 				"egre", od.prevEgrTs.UnixNano())
 		}
 
-		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
-			offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+		if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
+			offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
 			offset = normalize(offset)
 		}
 

@@ -15,10 +15,11 @@ import (
 )
 
 type pathOffsetData struct {
-	penultIngTs time.Time
-	prevIngTs   time.Time
-	prevEgrTs   time.Time
-	counter     uint8
+	propenultIngTs time.Time
+	penultIngTs    time.Time
+	prevIngTs      time.Time
+	prevEgrTs      time.Time
+	counter        uint8
 }
 
 type offsetMap map[string]*pathOffsetData
@@ -112,7 +113,7 @@ func ExtFingerprint(scionLayer *slayers.SCION) ([]byte, bool) {
 
 func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId string) {
 	od, ok := tsDataMap[pathId]
-	if !ok || headerOffset == 0 {
+	if !ok || headerOffset == 0 || measuredOffset == 0 {
 		return
 	}
 
@@ -326,10 +327,11 @@ func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
 		od.prevEgrTs = ts
 	} else {
 		m[key] = &pathOffsetData{
-			prevEgrTs:   ts,
-			penultIngTs: time.Time{},
-			prevIngTs:   time.Time{},
-			counter:     0,
+			prevEgrTs:      ts,
+			penultIngTs:    time.Time{},
+			prevIngTs:      time.Time{},
+			propenultIngTs: time.Time{},
+			counter:        0,
 		}
 	}
 }
@@ -338,18 +340,21 @@ func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
 	mapLock.Lock()
 	defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
+		od.propenultIngTs = od.penultIngTs
 		od.penultIngTs = od.prevIngTs
 		od.prevIngTs = ts
 	} else {
 		m[key] = &pathOffsetData{
-			prevIngTs:   ts,
-			counter:     0,
-			prevEgrTs:   time.Time{},
-			penultIngTs: time.Time{},
+			prevIngTs:      ts,
+			counter:        0,
+			prevEgrTs:      time.Time{},
+			penultIngTs:    time.Time{},
+			propenultIngTs: time.Time{},
 		}
 	}
 }
 
+// TODO: Check if this is still needed
 func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
 	mapLock.Lock()
 	defer mapLock.Unlock()

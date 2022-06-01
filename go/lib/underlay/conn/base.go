@@ -69,8 +69,8 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			var offset int64 = 0
 			pathId := string(id)
 			od, ok := tsDataMap[pathId]
-			if ok && !od.prevIngTs.IsZero() {
-				offset = kTime.Sub(od.prevIngTs).Nanoseconds()
+			if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
+				offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
 				offset = normalize(offset)
 			}
 			tsDataMap.addOrUpdateIngressTime(kTime, pathId)
@@ -136,8 +136,8 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 						"egre zero", od.prevEgrTs.IsZero())
 				}
 
-				if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
-					offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+				if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
+					offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
 					offset = normalize(offset)
 				}
 
