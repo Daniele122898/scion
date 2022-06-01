@@ -13,13 +13,13 @@ go build -o ./bin/ ./go/posix-router/
 echo "building go/scion-pki"
 go build -o ./bin/ ./go/scion-pki/
 
-echo "setup for minimal run"
-rm -rf gen* logs
+# echo "setup for minimal run"
+# rm -rf gen* logs
 export PYTHONPATH=python/:.
 #printf '#!/bin/bash\necho "0.0.0.0"' > tools/docker-ip
-python3 python/topology/generator.py -c ./topology/tiny4.topo
-rm gen/jaeger-dc.yml
-mkdir gen-cache
+# python3 python/topology/generator.py -c ./topology/tiny4.topo
+# rm gen/jaeger-dc.yml
+# mkdir gen-cache
 
 echo "Please kill old supervisor instance listed below using kill -s SIGTERM <pid> then call reload and start all"
 ps -ef | grep supervisord
