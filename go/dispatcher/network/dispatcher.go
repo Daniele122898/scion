@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/scionproto/scion/go/dispatcher/dispatcher"
+	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
@@ -29,7 +30,8 @@ type Dispatcher struct {
 	SocketFileMode    os.FileMode
 }
 
-func (d *Dispatcher) ListenAndServe() error {
+func (d *Dispatcher) ListenAndServe(ia addr.IA) error {
+	dispatcher.RegisterIA(ia)
 	dispServer, err := dispatcher.NewServer(d.UnderlaySocket, nil, nil)
 	if err != nil {
 		return err

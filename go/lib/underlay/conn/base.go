@@ -27,7 +27,6 @@ import (
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 
 	"github.com/scionproto/scion/go/lib/log"
 )
@@ -54,7 +53,10 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 		)
 		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
 			log.Info(fmt.Sprintf("============================================== READF PACKET"))
-			// TODO (daniele): Check for the correct option type
+
+			ingressId, _ := getIngressId(&scionLayer)
+			log.Info("ScionLayer Ingress id", "ingressId", ingressId)
+
 			op := hbhLayer.Options[0]
 			offsetData := hbhoffset(op.OptData)
 			offsetHeader, id := offsetData.parseOffsetHeaderData()
@@ -78,7 +80,7 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 
 			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
-			checkOffsetConditions(offsetHeader, offset, pathId)
+			checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
 			delta := offsetHeader - offset
 			log.Info("============= Reading Packet TS: \n",
@@ -117,8 +119,8 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 	var pathId string
 	if err == nil {
 		if id, ok := ExtFingerprint(&scionLayer); ok {
-			if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
-				// if data := string(udpLayer.Payload); data == "Hello, world!" {
+			// if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
+			if data := string(udpLayer.Payload); data == "Hello, world!" {
 				//if len(udpLayer.Payload) == 4 {
 				pknr, _ := byteSliceToInt32(udpLayer.Payload)
 				log.Info(fmt.Sprintf("============================================== WRITE PACKET %d", pknr))

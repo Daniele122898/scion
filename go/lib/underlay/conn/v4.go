@@ -2,11 +2,12 @@ package conn
 
 import (
 	"fmt"
+	"net"
+	"time"
+
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
 	"golang.org/x/net/ipv4"
-	"net"
-	"time"
 )
 
 type connUDPIPv4 struct {
@@ -47,6 +48,8 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
 		log.Info(fmt.Sprintf("============================================== READB PACKET"))
 
+		ingressId, _ := getIngressId(&scionLayer)
+		log.Info("ScionLayer Ingress id", "ingressId", ingressId)
 		// TODO (daniele): Re-Add after SW TS are fixed
 		//kTime, err2 := parseOOB(c.txOob[:oobn])
 		//if err2 != nil {
@@ -68,7 +71,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
-		checkOffsetConditions(offsetHeader, offset, pathId)
+		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
 		if od, ok := tsDataMap[pathId]; ok {
 			log.Info("=========== Read Batch Data",

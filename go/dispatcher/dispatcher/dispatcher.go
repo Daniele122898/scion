@@ -40,6 +40,10 @@ type Server struct {
 	ipv6Conn     net.PacketConn
 }
 
+func RegisterIA(ia addr.IA) {
+	conn.SetLocalIA(ia)
+}
+
 // NewServer creates new instance of Server. Internally, it opens the dispatcher ports
 // for both IPv4 and IPv6. Returns error if the ports can't be opened.
 func NewServer(address string, ipv4Conn, ipv6Conn net.PacketConn) (*Server, error) {

@@ -30,9 +30,11 @@ import (
 
 	"github.com/scionproto/scion/go/dispatcher/config"
 	"github.com/scionproto/scion/go/dispatcher/network"
+	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/slayers/path"
+	"github.com/scionproto/scion/go/lib/topology"
 	"github.com/scionproto/scion/go/lib/util"
 	"github.com/scionproto/scion/go/pkg/app"
 	"github.com/scionproto/scion/go/pkg/app/launcher"
@@ -52,7 +54,26 @@ func main() {
 	application.Run()
 }
 
+func loaderMetrics() topology.LoaderMetrics {
+	return topology.LoaderMetrics{}
+}
+
 func realMain(ctx context.Context) error {
+	topo, err := topology.NewLoader(topology.LoaderCfg{
+		File:      "topology.json",
+		Reload:    app.SIGHUPChannel(ctx),
+		Validator: &topology.DefaultValidator{},
+		Metrics:   loaderMetrics(),
+	})
+
+	var ia addr.IA = 0
+	if err != nil {
+		log.Error("Failed to generate topology loader", "err", err)
+	} else {
+		ia = topo.IA()
+		log.Info("Loaded Topology and Set IA", "IA", ia.String())
+	}
+
 	if err := util.CreateParentDirs(globalCfg.Dispatcher.ApplicationSocket); err != nil {
 		return serrors.WrapStr("creating directory tree for socket", err)
 	}
@@ -68,6 +89,7 @@ func realMain(ctx context.Context) error {
 			globalCfg.Dispatcher.ApplicationSocket,
 			os.FileMode(globalCfg.Dispatcher.SocketFileMode),
 			globalCfg.Dispatcher.UnderlayPort,
+			ia,
 		)
 	})
 
@@ -135,7 +157,7 @@ func realMain(ctx context.Context) error {
 }
 
 func RunDispatcher(deleteSocketFlag bool, applicationSocket string, socketFileMode os.FileMode,
-	underlayPort int) error {
+	underlayPort int, ia addr.IA) error {
 
 	if deleteSocketFlag {
 		if err := deleteSocket(globalCfg.Dispatcher.ApplicationSocket); err != nil {
@@ -148,7 +170,7 @@ func RunDispatcher(deleteSocketFlag bool, applicationSocket string, socketFileMo
 		SocketFileMode:    socketFileMode,
 	}
 	log.Debug("Dispatcher starting", "appSocket", applicationSocket, "underlayPort", underlayPort)
-	return dispatcher.ListenAndServe()
+	return dispatcher.ListenAndServe(ia)
 }
 
 func deleteSocket(socket string) error {

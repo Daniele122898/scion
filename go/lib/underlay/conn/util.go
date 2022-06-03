@@ -4,14 +4,16 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/google/gopacket"
+	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
 	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"golang.org/x/sys/unix"
-	"io"
-	"sync"
-	"time"
 )
 
 type pathOffsetData struct {
@@ -26,6 +28,11 @@ type offsetMap map[string]*pathOffsetData
 
 var tsDataMap offsetMap = make(map[string]*pathOffsetData)
 var mapLock sync.Mutex
+var localIA addr.IA = 0
+
+func SetLocalIA(ia addr.IA) {
+	localIA = ia
+}
 
 // Go only has builtin abs function for float64 :)
 func abs(x int64) int64 {
@@ -87,6 +94,28 @@ func writeFields(w io.Writer, fields ...interface{}) bool {
 	return true
 }
 
+func getIngressId(scionLayer *slayers.SCION) (uint16, error) {
+	ppath := scionLayer.Path.(*scion.Raw)
+	curr, err := ppath.GetCurrentHopField()
+	if err != nil {
+		return 0, err
+	}
+
+	info, err := ppath.GetCurrentInfoField()
+	if err != nil {
+		return 0, err
+	}
+
+	var ingressId uint16 = 0
+	if !info.ConsDir {
+		ingressId = curr.ConsEgress
+	} else {
+		ingressId = curr.ConsIngress
+	}
+
+	return ingressId, nil
+}
+
 // Uniquely identifies the path based on the sequence of ASes and BRs and additionally
 // the source and destination addresses. This should uniquely identify a complete path
 // from SIG to SIG
@@ -111,7 +140,7 @@ func ExtFingerprint(scionLayer *slayers.SCION) ([]byte, bool) {
 	return h.Sum(nil), true
 }
 
-func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId string) {
+func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId string, ingressId uint16) {
 	od, ok := tsDataMap[pathId]
 	if !ok || headerOffset == 0 || measuredOffset == 0 {
 		return
@@ -129,7 +158,9 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 			log.Info("Potential Queueing Delay",
 				"delta", delta,
 				"headerOffset", headerOffset,
-				"measuredOffset", measuredOffset)
+				"measuredOffset", measuredOffset,
+				"ingressId", ingressId,
+				"IA", localIA.String())
 		}
 	} else if delta < -offsetThresh {
 		// Potential Link health degradation
@@ -140,7 +171,9 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 			log.Info("Potential Link Health Degradation",
 				"delta", delta,
 				"headerOffset", headerOffset,
-				"measuredOffset", measuredOffset)
+				"measuredOffset", measuredOffset,
+				"ingressId", ingressId,
+				"IA", localIA.String())
 		}
 	} else {
 		// Everything is fine

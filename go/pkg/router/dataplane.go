@@ -477,6 +477,7 @@ func (d *DataPlane) Run(ctx context.Context) error {
 	d.running = true
 
 	d.initMetrics()
+	conn.SetLocalIA(d.localIA)
 
 	read := func(ingressID uint16, rd BatchConn) {
 
