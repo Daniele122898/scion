@@ -282,12 +282,10 @@ func parseOOB(oob []byte) (time.Time, error) {
 
 	var kTime time.Time
 	for _, msg := range msgs {
-		log.Info("OOB HEADER VALUE: ", "lvl", msg.Header.Level, "type", msg.Header.Type)
 		if msg.Header.Level != unix.SOL_SOCKET ||
 			(msg.Header.Type != unix.SO_TIMESTAMPING && msg.Header.Type != unix.SO_TIMESTAMPING_NEW) {
 			continue
 		}
-		dumpByteSlice(msg.Data)
 		ts, err := scmDataToTime(msg.Data)
 		if err != nil {
 			return time.Time{}, err
