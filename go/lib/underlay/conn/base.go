@@ -27,6 +27,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
+	"github.com/scionproto/scion/go/lib/sockctrl"
 
 	"github.com/scionproto/scion/go/lib/log"
 )
@@ -42,7 +43,7 @@ type connUDPBase struct {
 
 func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 	n, oobn, _, src, err := c.conn.ReadMsgUDP(b, c.rxOob)
-	kTime := time.Now()
+	goTime := time.Now()
 	if err != nil {
 		return n, src, err
 	}
@@ -62,11 +63,11 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			offsetHeader, id := offsetData.parseOffsetHeaderData()
 			// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
 			// TODO (daniele): Re-add after SW TS are fixed
-			//kTime, err := parseOOB(c.rxOob[:oobn])
-			//if err != nil {
-			//	kTime = goTime // Use go time as backup
-			//	log.Info("Used Go time as backup")
-			//}
+			kTime, err := parseOOB(c.rxOob[:oobn])
+			if err != nil {
+				kTime = goTime // Use go time as backup
+				log.Info("Used Go time as backup")
+			}
 			log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
 			//kTime = goTime
 
@@ -206,14 +207,14 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 		n, err = c.conn.WriteTo(b, dst)
 	}
 
-	//if len(pathId) > 0 {
-	//	_ = sockctrl.SockControl(c.conn, func(fd int) error {
-	//		return readTxTimestamp(fd, c, isOrigin, pathId)
-	//	})
-	//}
+	if len(pathId) > 0 {
+		_ = sockctrl.SockControl(c.conn, func(fd int) error {
+			return readTxTimestamp(fd, c, isOrigin, pathId)
+		})
+	}
 
 	// TODO (daniele): Remove this temporary measure
-	getGoTxTimestamp(isOrigin, pathId)
+	// getGoTxTimestamp(isOrigin, pathId)
 
 	return n, err
 	//return c.conn.WriteTo(b, dst)

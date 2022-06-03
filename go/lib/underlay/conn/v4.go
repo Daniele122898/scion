@@ -7,6 +7,7 @@ import (
 
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
+	"github.com/scionproto/scion/go/lib/sockctrl"
 	"golang.org/x/net/ipv4"
 )
 
@@ -30,7 +31,7 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 // It returns the number of packets read, and an error if any.
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 
-	n, _, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
+	n, oobn, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
 	if n == 0 || err != nil {
 		return 0, err
 	}
@@ -38,7 +39,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	msgs[0].N = n
 	msgs[0].Addr = src
 
-	kTime := time.Now()
+	goTime := time.Now()
 
 	var (
 		scionLayer slayers.SCION
@@ -51,11 +52,11 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		ingressId, _ := getIngressId(&scionLayer)
 		log.Info("ScionLayer Ingress id", "ingressId", ingressId)
 		// TODO (daniele): Re-Add after SW TS are fixed
-		//kTime, err2 := parseOOB(c.txOob[:oobn])
-		//if err2 != nil {
-		//	kTime = goTime // Use go time as backup
-		//	log.Info("Used Go time as backup")
-		//}
+		kTime, err2 := parseOOB(c.txOob[:oobn])
+		if err2 != nil {
+			kTime = goTime // Use go time as backup
+			log.Info("Used Go time as backup")
+		}
 		log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
 		//kTime = goTime
 		op := hbhLayer.Options[0]
@@ -157,13 +158,13 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 	n, err := c.pconn.WriteBatch(msgs, flags)
 
 	// TODO (daniele): Remove this temporary measure
-	getGoTxTimestamp(isOrigin, pathId)
+	// getGoTxTimestamp(isOrigin, pathId)
 
-	//if len(pathId) > 0 {
-	//	_ = sockctrl.SockControl(c.conn, func(fd int) error {
-	//		return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
-	//	})
-	//}
+	if len(pathId) > 0 {
+		_ = sockctrl.SockControl(c.conn, func(fd int) error {
+			return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
+		})
+	}
 
 	return n, err
 

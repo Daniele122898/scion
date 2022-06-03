@@ -11,6 +11,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/log"
+	"github.com/scionproto/scion/go/lib/serrors"
 	"github.com/scionproto/scion/go/lib/slayers"
 	"github.com/scionproto/scion/go/lib/slayers/path/scion"
 	"golang.org/x/sys/unix"
@@ -161,6 +162,7 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"measuredOffset", measuredOffset,
 				"ingressId", ingressId,
 				"IA", localIA.String())
+			log.Flush()
 		}
 	} else if delta < -offsetThresh {
 		// Potential Link health degradation
@@ -174,6 +176,7 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"measuredOffset", measuredOffset,
 				"ingressId", ingressId,
 				"IA", localIA.String())
+			log.Flush()
 		}
 	} else {
 		// Everything is fine
@@ -268,39 +271,34 @@ func normalize(n int64) int64 {
 
 func parseOOB(oob []byte) (time.Time, error) {
 
-	// Check if this is less confused than SW timestamps
-	ts := time.Now()
-	log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
-	return ts, nil
+	if len(oob) == 0 {
+		return time.Time{}, serrors.New("Cant parse OOB as len is 0")
+	}
 
-	//if len(oob) == 0 {
-	//	return time.Time{}, serrors.New("Cant parse OOB as len is 0")
-	//}
-	//
-	//msgs, err := unix.ParseSocketControlMessage(oob)
-	//if err != nil {
-	//	return time.Time{}, err
-	//}
-	//
-	//var kTime time.Time
-	//for _, msg := range msgs {
-	//	log.Info("OOB HEADER VALUE: ", "lvl", msg.Header.Level, "type", msg.Header.Type)
-	//	if msg.Header.Level != unix.SOL_SOCKET ||
-	//		(msg.Header.Type != unix.SO_TIMESTAMPING && msg.Header.Type != unix.SO_TIMESTAMPING_NEW) {
-	//		continue
-	//	}
-	//	dumpByteSlice(msg.Data)
-	//	ts, err := scmDataToTime(msg.Data)
-	//	if err != nil {
-	//		return time.Time{}, err
-	//	}
-	//	log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
-	//	if ts.UnixNano() != 0 {
-	//		kTime = ts
-	//	}
-	//}
-	//
-	//return kTime, nil
+	msgs, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var kTime time.Time
+	for _, msg := range msgs {
+		log.Info("OOB HEADER VALUE: ", "lvl", msg.Header.Level, "type", msg.Header.Type)
+		if msg.Header.Level != unix.SOL_SOCKET ||
+			(msg.Header.Type != unix.SO_TIMESTAMPING && msg.Header.Type != unix.SO_TIMESTAMPING_NEW) {
+			continue
+		}
+		dumpByteSlice(msg.Data)
+		ts, err := scmDataToTime(msg.Data)
+		if err != nil {
+			return time.Time{}, err
+		}
+		log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
+		if ts.UnixNano() != 0 {
+			kTime = ts
+		}
+	}
+
+	return kTime, nil
 }
 
 // 2x64bit ints
