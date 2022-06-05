@@ -30,14 +30,13 @@ func newConnUDPIPv4(listen, remote *net.UDPAddr, cfg *Config) (*connUDPIPv4, err
 func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 
 	n, oobn, _, src, err := c.conn.ReadMsgUDP(msgs[0].Buffers[0], c.txOob)
+	goTime := time.Now()
 	if n == 0 || err != nil {
 		return 0, err
 	}
 
 	msgs[0].N = n
 	msgs[0].Addr = src
-
-	goTime := time.Now()
 
 	var (
 		scionLayer slayers.SCION
@@ -80,6 +79,7 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
+		log.Info("Reading Batch", "delta", abs(offsetHeader-offset))
 		// 	log.Info("======== Reading Batch TS: \n",
 		// 		"id", pathId,
 		// 		"offset", offset,

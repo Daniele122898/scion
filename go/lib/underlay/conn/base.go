@@ -45,58 +45,57 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 	if err != nil {
 		return n, src, err
 	}
-	if oobn > 0 {
-		var (
-			scionLayer slayers.SCION
-			hbhLayer   slayers.HopByHopExtn
-		)
-		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
-			ingressId, _ := getIngressId(&scionLayer)
+	var (
+		scionLayer slayers.SCION
+		hbhLayer   slayers.HopByHopExtn
+	)
+	if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
+		ingressId, _ := getIngressId(&scionLayer)
 
-			op := hbhLayer.Options[0]
-			offsetData := hbhoffset(op.OptData)
-			offsetHeader, id := offsetData.parseOffsetHeaderData()
-			// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
-			// TODO (daniele): Re-add after SW TS are fixed
-			kTime, err := parseOOB(c.rxOob[:oobn])
-			if err != nil {
-				kTime = goTime // Use go time as backup
-				log.Info("Used Go time as backup")
-			}
-			//kTime = goTime
-
-			var offset int64 = 0
-			pathId := string(id)
-			// if od, ok := tsDataMap[pathId]; ok {
-			// 	log.Info("=========== Read Data",
-			// 		"propenult", od.propenultIngTs.UnixNano(),
-			// 		"propenult zero", od.propenultIngTs.IsZero(),
-			// 		"penult", od.penultIngTs.UnixNano(),
-			// 		"penult zero", od.penultIngTs.IsZero(),
-			// 		"last", od.prevIngTs.UnixNano(),
-			// 		"last zero", od.prevIngTs.IsZero(),
-			// 		"egre", od.prevEgrTs.UnixNano(),
-			// 		"egre zero", od.prevEgrTs.IsZero())
-			// }
-			od, ok := tsDataMap[pathId]
-			if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
-				offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
-				offset = normalize(offset)
-			}
-			tsDataMap.addOrUpdateIngressTime(kTime, pathId)
-
-			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
-			checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
-
-			// delta := offsetHeader - offset
-			// log.Info("============= Reading Packet TS: \n",
-			// 	"id", pathId,
-			// 	"offset", offset,
-			// 	"headoff", offsetHeader,
-			// 	"delta", delta,
-			// 	"listen", c.Listen.String(),
-			// 	"remote", c.Remote.String())
+		op := hbhLayer.Options[0]
+		offsetData := hbhoffset(op.OptData)
+		offsetHeader, id := offsetData.parseOffsetHeaderData()
+		// TODO (daniele): Do we really want to use goTime as backup? It could ruin our offsets
+		// TODO (daniele): Re-add after SW TS are fixed
+		kTime, err := parseOOB(c.rxOob[:oobn])
+		if err != nil {
+			kTime = goTime // Use go time as backup
+			log.Info("Used Go time as backup")
 		}
+		//kTime = goTime
+
+		var offset int64 = 0
+		pathId := string(id)
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Read Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
+		od, ok := tsDataMap[pathId]
+		if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
+			offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
+			offset = normalize(offset)
+		}
+		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
+
+		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
+		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
+
+		log.Info("Read", "delta", abs(offsetHeader-offset))
+		// delta := offsetHeader - offset
+		// log.Info("============= Reading Packet TS: \n",
+		// 	"id", pathId,
+		// 	"offset", offset,
+		// 	"headoff", offsetHeader,
+		// 	"delta", delta,
+		// 	"listen", c.Listen.String(),
+		// 	"remote", c.Remote.String())
 	}
 
 	return n, src, err
