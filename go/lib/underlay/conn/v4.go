@@ -1,7 +1,6 @@
 package conn
 
 import (
-	"fmt"
 	"net"
 	"time"
 
@@ -46,34 +45,30 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 	)
 
 	if _, err2 := decodeLayers(msgs[0].Buffers[0], &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
-		log.Info(fmt.Sprintf("============================================== READB PACKET"))
-
 		ingressId, _ := getIngressId(&scionLayer)
-		log.Info("ScionLayer Ingress id", "ingressId", ingressId)
 		// TODO (daniele): Re-Add after SW TS are fixed
 		kTime, err2 := parseOOB(c.txOob[:oobn])
 		if err2 != nil {
 			kTime = goTime // Use go time as backup
 			log.Info("Used Go time as backup")
 		}
-		log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
 		//kTime = goTime
 		op := hbhLayer.Options[0]
 		offsetData := hbhoffset(op.OptData)
 		offsetHeader, id := offsetData.parseOffsetHeaderData()
 		pathId := string(id)
 
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Read Batch Data",
-				"propenult", od.propenultIngTs.UnixNano(),
-				"propenult zero", od.propenultIngTs.IsZero(),
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Read Batch Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
 
 		var offset int64 = 0
 		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
@@ -85,13 +80,13 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
-		log.Info("======== Reading Batch TS: \n",
-			"id", pathId,
-			"offset", offset,
-			"headoff", offsetHeader,
-			"delta", abs(offsetHeader-offset),
-			"listen", c.Listen.String(),
-			"remote", c.Remote.String())
+		// 	log.Info("======== Reading Batch TS: \n",
+		// 		"id", pathId,
+		// 		"offset", offset,
+		// 		"headoff", offsetHeader,
+		// 		"delta", abs(offsetHeader-offset),
+		// 		"listen", c.Listen.String(),
+		// 		"remote", c.Remote.String())
 	}
 
 	return 1, err
@@ -110,28 +105,27 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		if _, err2 := decodeLayers(msgs[i].Buffers[0], &scionLayer, &hbhLayer); err2 != nil || hbhLayer.ExtLen != 7 {
 			continue
 		}
-		log.Info(fmt.Sprintf("============================================== WRITEB PACKET"))
 		isOrigin = hbhLayer.ExtLen == 0
 		// TODO (daniele): Check for the correct option type
 		op := hbhLayer.Options[0]
 		offsetData := hbhoffset(op.OptData)
-		offsetHeader, id := offsetData.parseOffsetHeaderData()
+		_, id := offsetData.parseOffsetHeaderData()
 		pathId = string(id)
 
 		// Calculate offset
 		var offset int64 = 0
 
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Writer BATCH Data",
-				"propenult", od.propenultIngTs.UnixNano(),
-				"propenult zero", od.propenultIngTs.IsZero(),
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Writer BATCH Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
 
 		if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 			if isOrigin {
@@ -143,13 +137,13 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 			}
 		}
 
-		log.Info("======== Write Batch TS: \n",
-			"id", pathId,
-			"isOrigin", isOrigin,
-			"offset", offset,
-			"headoff", offsetHeader,
-			"delta", abs(offsetHeader-offset),
-		)
+		// log.Info("======== Write Batch TS: \n",
+		// 	"id", pathId,
+		// 	"isOrigin", isOrigin,
+		// 	"offset", offset,
+		// 	"headoff", offsetHeader,
+		// 	"delta", abs(offsetHeader-offset),
+		// )
 
 		// TODO (daniele): Check against header offset for anomalities
 

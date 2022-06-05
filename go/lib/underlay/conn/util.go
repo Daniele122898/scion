@@ -164,7 +164,6 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"ts ns", ts.UnixNano(),
 				"ingressId", ingressId,
 				"IA", localIA.String())
-			log.Flush()
 		}
 	} else if delta < -offsetThresh {
 		// Potential Link health degradation
@@ -179,7 +178,6 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"ts ns", ts.UnixNano(),
 				"ingressId", ingressId,
 				"IA", localIA.String())
-			log.Flush()
 		}
 	} else {
 		// Everything is fine
@@ -293,7 +291,6 @@ func parseOOB(oob []byte) (time.Time, error) {
 		if err != nil {
 			return time.Time{}, err
 		}
-		log.Info("Kernel timestamp OOB", "ns", ts.Nanosecond())
 		if ts.UnixNano() != 0 {
 			kTime = ts
 		}

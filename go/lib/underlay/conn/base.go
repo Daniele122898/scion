@@ -20,7 +20,6 @@
 package conn
 
 import (
-	"fmt"
 	"net"
 	"time"
 
@@ -52,10 +51,7 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			hbhLayer   slayers.HopByHopExtn
 		)
 		if _, err2 := decodeLayers(b, &scionLayer, &hbhLayer); err2 == nil && hbhLayer.ExtLen == 7 {
-			log.Info(fmt.Sprintf("============================================== READF PACKET"))
-
 			ingressId, _ := getIngressId(&scionLayer)
-			log.Info("ScionLayer Ingress id", "ingressId", ingressId)
 
 			op := hbhLayer.Options[0]
 			offsetData := hbhoffset(op.OptData)
@@ -67,22 +63,21 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 				kTime = goTime // Use go time as backup
 				log.Info("Used Go time as backup")
 			}
-			log.Info("kernel timestamp readfrom: ", "nano", kTime.Nanosecond())
 			//kTime = goTime
 
 			var offset int64 = 0
 			pathId := string(id)
-			if od, ok := tsDataMap[pathId]; ok {
-				log.Info("=========== Read Data",
-					"propenult", od.propenultIngTs.UnixNano(),
-					"propenult zero", od.propenultIngTs.IsZero(),
-					"penult", od.penultIngTs.UnixNano(),
-					"penult zero", od.penultIngTs.IsZero(),
-					"last", od.prevIngTs.UnixNano(),
-					"last zero", od.prevIngTs.IsZero(),
-					"egre", od.prevEgrTs.UnixNano(),
-					"egre zero", od.prevEgrTs.IsZero())
-			}
+			// if od, ok := tsDataMap[pathId]; ok {
+			// 	log.Info("=========== Read Data",
+			// 		"propenult", od.propenultIngTs.UnixNano(),
+			// 		"propenult zero", od.propenultIngTs.IsZero(),
+			// 		"penult", od.penultIngTs.UnixNano(),
+			// 		"penult zero", od.penultIngTs.IsZero(),
+			// 		"last", od.prevIngTs.UnixNano(),
+			// 		"last zero", od.prevIngTs.IsZero(),
+			// 		"egre", od.prevEgrTs.UnixNano(),
+			// 		"egre zero", od.prevEgrTs.IsZero())
+			// }
 			od, ok := tsDataMap[pathId]
 			if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
 				offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
@@ -93,14 +88,14 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 			// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 			checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
-			delta := offsetHeader - offset
-			log.Info("============= Reading Packet TS: \n",
-				"id", pathId,
-				"offset", offset,
-				"headoff", offsetHeader,
-				"delta", delta,
-				"listen", c.Listen.String(),
-				"remote", c.Remote.String())
+			// delta := offsetHeader - offset
+			// log.Info("============= Reading Packet TS: \n",
+			// 	"id", pathId,
+			// 	"offset", offset,
+			// 	"headoff", offsetHeader,
+			// 	"delta", delta,
+			// 	"listen", c.Listen.String(),
+			// 	"remote", c.Remote.String())
 		}
 	}
 
@@ -133,24 +128,22 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 			// if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
 			if data := string(udpLayer.Payload); data == "Hello, world!" {
 				//if len(udpLayer.Payload) == 4 {
-				log.Info(fmt.Sprintf("============================================== WRITE PACKET"))
-
 				pathId = string(id)
 
 				// Calculate offset
 				var offset int64 = 0
 
-				if od, ok := tsDataMap[pathId]; ok {
-					log.Info("=========== Writer Data",
-						"propenult", od.propenultIngTs.UnixNano(),
-						"propenult zero", od.propenultIngTs.IsZero(),
-						"penult", od.penultIngTs.UnixNano(),
-						"penult zero", od.penultIngTs.IsZero(),
-						"last", od.prevIngTs.UnixNano(),
-						"last zero", od.prevIngTs.IsZero(),
-						"egre", od.prevEgrTs.UnixNano(),
-						"egre zero", od.prevEgrTs.IsZero())
-				}
+				// if od, ok := tsDataMap[pathId]; ok {
+				// 	log.Info("=========== Writer Data",
+				// 		"propenult", od.propenultIngTs.UnixNano(),
+				// 		"propenult zero", od.propenultIngTs.IsZero(),
+				// 		"penult", od.penultIngTs.UnixNano(),
+				// 		"penult zero", od.penultIngTs.IsZero(),
+				// 		"last", od.prevIngTs.UnixNano(),
+				// 		"last zero", od.prevIngTs.IsZero(),
+				// 		"egre", od.prevEgrTs.UnixNano(),
+				// 		"egre zero", od.prevEgrTs.IsZero())
+				// }
 
 				if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 					if isOrigin {
@@ -205,12 +198,12 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 					paylen += int16(nhbhBytes)
 					b[6] = byte(paylen >> 8)
 					b[7] = byte(paylen)
-					log.Info("======== Writing packet: \n",
-						"isOrigin", isOrigin,
-						"id", pathId,
-						"offset", offset,
-						"listen", c.Listen.String(),
-						"remote", c.Remote.String())
+					// log.Info("======== Writing packet: \n",
+					// 	"isOrigin", isOrigin,
+					// 	"id", pathId,
+					// 	"offset", offset,
+					// 	"listen", c.Listen.String(),
+					// 	"remote", c.Remote.String())
 				}
 			}
 		}
