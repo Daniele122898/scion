@@ -147,6 +147,7 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 		return
 	}
 
+	ts := time.Now()
 	mapLock.Lock()
 	defer mapLock.Unlock()
 	delta := headerOffset - measuredOffset
@@ -160,6 +161,7 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"delta", delta,
 				"headerOffset", headerOffset,
 				"measuredOffset", measuredOffset,
+				"ts ns", ts.UnixNano(),
 				"ingressId", ingressId,
 				"IA", localIA.String())
 			log.Flush()
@@ -174,6 +176,7 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 				"delta", delta,
 				"headerOffset", headerOffset,
 				"measuredOffset", measuredOffset,
+				"ts ns", ts.UnixNano(),
 				"ingressId", ingressId,
 				"IA", localIA.String())
 			log.Flush()
