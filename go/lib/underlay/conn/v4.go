@@ -7,7 +7,6 @@ import (
 
 	"github.com/scionproto/scion/go/lib/log"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/sockctrl"
 	"golang.org/x/net/ipv4"
 )
 
@@ -64,6 +63,18 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		offsetHeader, id := offsetData.parseOffsetHeaderData()
 		pathId := string(id)
 
+		if od, ok := tsDataMap[pathId]; ok {
+			log.Info("=========== Read Batch Data",
+				"propenult", od.propenultIngTs.UnixNano(),
+				"propenult zero", od.propenultIngTs.IsZero(),
+				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
+				"last", od.prevIngTs.UnixNano(),
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
+		}
+
 		var offset int64 = 0
 		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
 			offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
@@ -73,16 +84,6 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
-
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Read Batch Data",
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
 
 		log.Info("======== Reading Batch TS: \n",
 			"id", pathId,
@@ -122,14 +123,24 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 
 		if od, ok := tsDataMap[pathId]; ok {
 			log.Info("=========== Writer BATCH Data",
+				"propenult", od.propenultIngTs.UnixNano(),
+				"propenult zero", od.propenultIngTs.IsZero(),
 				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
 				"last", od.prevIngTs.UnixNano(),
-				"egre", od.prevEgrTs.UnixNano())
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
 		}
 
 		if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
-			offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
-			offset = normalize(offset)
+			if isOrigin {
+				offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+				offset = normalize(offset)
+			} else {
+				offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
+				offset = normalize(offset)
+			}
 		}
 
 		log.Info("======== Write Batch TS: \n",
@@ -158,13 +169,13 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 	n, err := c.pconn.WriteBatch(msgs, flags)
 
 	// TODO (daniele): Remove this temporary measure
-	// getGoTxTimestamp(isOrigin, pathId)
+	getGoTxTimestamp(isOrigin, pathId)
 
-	if len(pathId) > 0 {
-		_ = sockctrl.SockControl(c.conn, func(fd int) error {
-			return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
-		})
-	}
+	// if len(pathId) > 0 {
+	// 	_ = sockctrl.SockControl(c.conn, func(fd int) error {
+	// 		return readTxTimestamp(fd, &c.connUDPBase, false, pathId)
+	// 	})
+	// }
 
 	return n, err
 

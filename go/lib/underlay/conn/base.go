@@ -27,7 +27,6 @@ import (
 	"github.com/google/gopacket"
 	"github.com/scionproto/scion/go/lib/common"
 	"github.com/scionproto/scion/go/lib/slayers"
-	"github.com/scionproto/scion/go/lib/sockctrl"
 
 	"github.com/scionproto/scion/go/lib/log"
 )
@@ -73,6 +72,17 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 
 			var offset int64 = 0
 			pathId := string(id)
+			if od, ok := tsDataMap[pathId]; ok {
+				log.Info("=========== Read Data",
+					"propenult", od.propenultIngTs.UnixNano(),
+					"propenult zero", od.propenultIngTs.IsZero(),
+					"penult", od.penultIngTs.UnixNano(),
+					"penult zero", od.penultIngTs.IsZero(),
+					"last", od.prevIngTs.UnixNano(),
+					"last zero", od.prevIngTs.IsZero(),
+					"egre", od.prevEgrTs.UnixNano(),
+					"egre zero", od.prevEgrTs.IsZero())
+			}
 			od, ok := tsDataMap[pathId]
 			if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
 				offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
@@ -123,8 +133,7 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 			// if scionLayer.PathType == scion.PathType && len(udpLayer.Payload) > 0 {
 			if data := string(udpLayer.Payload); data == "Hello, world!" {
 				//if len(udpLayer.Payload) == 4 {
-				pknr, _ := byteSliceToInt32(udpLayer.Payload)
-				log.Info(fmt.Sprintf("============================================== WRITE PACKET %d", pknr))
+				log.Info(fmt.Sprintf("============================================== WRITE PACKET"))
 
 				pathId = string(id)
 
@@ -133,6 +142,8 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 
 				if od, ok := tsDataMap[pathId]; ok {
 					log.Info("=========== Writer Data",
+						"propenult", od.propenultIngTs.UnixNano(),
+						"propenult zero", od.propenultIngTs.IsZero(),
 						"penult", od.penultIngTs.UnixNano(),
 						"penult zero", od.penultIngTs.IsZero(),
 						"last", od.prevIngTs.UnixNano(),
@@ -142,8 +153,13 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 				}
 
 				if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
-					offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
-					offset = normalize(offset)
+					if isOrigin {
+						offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
+						offset = normalize(offset)
+					} else {
+						offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
+						offset = normalize(offset)
+					}
 				}
 
 				// Testing offset
@@ -207,14 +223,14 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 		n, err = c.conn.WriteTo(b, dst)
 	}
 
-	if len(pathId) > 0 {
-		_ = sockctrl.SockControl(c.conn, func(fd int) error {
-			return readTxTimestamp(fd, c, isOrigin, pathId)
-		})
-	}
+	// if len(pathId) > 0 {
+	// 	_ = sockctrl.SockControl(c.conn, func(fd int) error {
+	// 		return readTxTimestamp(fd, c, isOrigin, pathId)
+	// 	})
+	// }
 
 	// TODO (daniele): Remove this temporary measure
-	// getGoTxTimestamp(isOrigin, pathId)
+	getGoTxTimestamp(isOrigin, pathId)
 
 	return n, err
 	//return c.conn.WriteTo(b, dst)

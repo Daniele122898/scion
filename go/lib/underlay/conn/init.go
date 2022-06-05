@@ -85,11 +85,11 @@ func (cc *connUDPBase) initConnUDP(network string, laddr, raddr *net.UDPAddr, cf
 	}
 
 	// TODO (daniele): Check differences in unix flags and syscall flags.
-	tsflags := unix.SOF_TIMESTAMPING_SOFTWARE | unix.SOF_TIMESTAMPING_RX_SOFTWARE | // sw rx
-		unix.SOF_TIMESTAMPING_TX_SOFTWARE | // sw tx
-		//unix.SOF_TIMESTAMPING_TX_SCHED |
-		unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG | // for tx
-		unix.SOF_TIMESTAMPING_OPT_ID
+	tsflags := unix.SOF_TIMESTAMPING_SOFTWARE | unix.SOF_TIMESTAMPING_RX_SOFTWARE // sw rx
+	// unix.SOF_TIMESTAMPING_TX_SOFTWARE | // sw tx
+	// unix.SOF_TIMESTAMPING_TX_SCHED |
+	// unix.SOF_TIMESTAMPING_OPT_PKTINFO | unix.SOF_TIMESTAMPING_OPT_CMSG | // for tx
+	// unix.SOF_TIMESTAMPING_OPT_ID
 	//unix.SOF_TIMESTAMPING_OPT_TSONLY
 
 	// TODO (daniele): Check difference to SO_TIMESTAMPNS and if this timestamp is really less accurate
