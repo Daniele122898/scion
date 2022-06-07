@@ -57,36 +57,39 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		offsetHeader, id := offsetData.parseOffsetHeaderData()
 		pathId := string(id)
 
-		// if od, ok := tsDataMap[pathId]; ok {
-		// 	log.Info("=========== Read Batch Data",
-		// 		"propenult", od.propenultIngTs.UnixNano(),
-		// 		"propenult zero", od.propenultIngTs.IsZero(),
-		// 		"penult", od.penultIngTs.UnixNano(),
-		// 		"penult zero", od.penultIngTs.IsZero(),
-		// 		"last", od.prevIngTs.UnixNano(),
-		// 		"last zero", od.prevIngTs.IsZero(),
-		// 		"egre", od.prevEgrTs.UnixNano(),
-		// 		"egre zero", od.prevEgrTs.IsZero())
-		// }
+		if od, ok := tsDataMap[pathId]; ok {
+			log.Info("=========== Read Batch Data",
+				"propenult", od.propenultIngTs.UnixNano(),
+				"propenult zero", od.propenultIngTs.IsZero(),
+				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
+				"last", od.prevIngTs.UnixNano(),
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
+		}
 
 		var offset int64 = 0
-		if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
-			offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
+		// if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
+		// 	offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
+		// 	offset = normalize(offset)
+		// }
+		if od, ok := tsDataMap[pathId]; ok && !od.prevIngTs.IsZero() && !od.penultIngTs.IsZero() {
+			offset = od.prevIngTs.Sub(od.penultIngTs).Nanoseconds()
 			offset = normalize(offset)
+
+			od.checkRingConditions(&kTime, ingressId)
+			od.repOffsets.addEntry(offsetHeader)
 		}
 		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
-		log.Info("Reading Batch", "delta", abs(offsetHeader-offset))
-		// 	log.Info("======== Reading Batch TS: \n",
-		// 		"id", pathId,
-		// 		"offset", offset,
-		// 		"headoff", offsetHeader,
-		// 		"delta", abs(offsetHeader-offset),
-		// 		"listen", c.Listen.String(),
-		// 		"remote", c.Remote.String())
+		log.Info("Reading Batch", "delta", offsetHeader-offset)
+		log.Info("======== Reading Batch TS:",
+			"offset", offset,
+			"headoff", offsetHeader)
 	}
 
 	return 1, err
@@ -115,18 +118,20 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		// Calculate offset
 		var offset int64 = 0
 
-		// if od, ok := tsDataMap[pathId]; ok {
-		// 	log.Info("=========== Writer BATCH Data",
-		// 		"propenult", od.propenultIngTs.UnixNano(),
-		// 		"propenult zero", od.propenultIngTs.IsZero(),
-		// 		"penult", od.penultIngTs.UnixNano(),
-		// 		"penult zero", od.penultIngTs.IsZero(),
-		// 		"last", od.prevIngTs.UnixNano(),
-		// 		"last zero", od.prevIngTs.IsZero(),
-		// 		"egre", od.prevEgrTs.UnixNano(),
-		// 		"egre zero", od.prevEgrTs.IsZero())
-		// }
+		if od, ok := tsDataMap[pathId]; ok {
+			log.Info("=========== Writer BATCH Data",
+				"propenult", od.propenultIngTs.UnixNano(),
+				"propenult zero", od.propenultIngTs.IsZero(),
+				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
+				"last", od.prevIngTs.UnixNano(),
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
+		}
 
+		goTime := time.Now()
+		var offsetNoQueue int64 = 0
 		if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 			if isOrigin {
 				offset = od.prevEgrTs.Sub(od.penultIngTs).Nanoseconds()
@@ -135,15 +140,14 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 				offset = od.prevEgrTs.Sub(od.propenultIngTs).Nanoseconds()
 				offset = normalize(offset)
 			}
+			offsetNoQueue = goTime.Sub(od.prevEgrTs).Nanoseconds()
 		}
 
-		// log.Info("======== Write Batch TS: \n",
-		// 	"id", pathId,
-		// 	"isOrigin", isOrigin,
-		// 	"offset", offset,
-		// 	"headoff", offsetHeader,
-		// 	"delta", abs(offsetHeader-offset),
-		// )
+		log.Info("======== Write Batch TS:",
+			"offset", offset,
+			"offsetnq", offsetNoQueue,
+			"diff", offset-offsetNoQueue,
+		)
 
 		// TODO (daniele): Check against header offset for anomalities
 
@@ -172,18 +176,6 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 	// }
 
 	return n, err
-
-	//	// TODO (daniele): Rewrote Batch as loop of singles since the Batch calls dont work
-	//	// with our OOB
-	//	//log.Info("============ REACHED WRITE BATCH ================")
-
-	//	//log.Info("============ LEAVING WRITE BATCH ================")
-	//
-	//	return len(msgs), nil
-	//} else {
-	//	return c.pconn.WriteBatch(msgs, flags)
-	//}
-
 }
 
 // SetReadDeadline sets the read deadline associated with the endpoint.

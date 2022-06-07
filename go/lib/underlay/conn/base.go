@@ -66,36 +66,38 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 
 		var offset int64 = 0
 		pathId := string(id)
-		// if od, ok := tsDataMap[pathId]; ok {
-		// 	log.Info("=========== Read Data",
-		// 		"propenult", od.propenultIngTs.UnixNano(),
-		// 		"propenult zero", od.propenultIngTs.IsZero(),
-		// 		"penult", od.penultIngTs.UnixNano(),
-		// 		"penult zero", od.penultIngTs.IsZero(),
-		// 		"last", od.prevIngTs.UnixNano(),
-		// 		"last zero", od.prevIngTs.IsZero(),
-		// 		"egre", od.prevEgrTs.UnixNano(),
-		// 		"egre zero", od.prevEgrTs.IsZero())
-		// }
+		if od, ok := tsDataMap[pathId]; ok {
+			log.Info("=========== Read Data",
+				"propenult", od.propenultIngTs.UnixNano(),
+				"propenult zero", od.propenultIngTs.IsZero(),
+				"penult", od.penultIngTs.UnixNano(),
+				"penult zero", od.penultIngTs.IsZero(),
+				"last", od.prevIngTs.UnixNano(),
+				"last zero", od.prevIngTs.IsZero(),
+				"egre", od.prevEgrTs.UnixNano(),
+				"egre zero", od.prevEgrTs.IsZero())
+		}
 		od, ok := tsDataMap[pathId]
-		if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
-			offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
+		// if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
+		// 	offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
+		// 	offset = normalize(offset)
+		// }
+		if ok && !od.prevIngTs.IsZero() && !od.penultIngTs.IsZero() {
+			offset = od.prevIngTs.Sub(od.penultIngTs).Nanoseconds()
 			offset = normalize(offset)
+
+			od.checkRingConditions(&kTime, ingressId)
+			od.repOffsets.addEntry(offsetHeader)
 		}
 		tsDataMap.addOrUpdateIngressTime(kTime, pathId)
 
 		// TODO (daniele): CHECK IF OFFSETS ARE SIMILAR
 		checkOffsetConditions(offsetHeader, offset, pathId, ingressId)
 
-		log.Info("Read", "delta", abs(offsetHeader-offset))
-		// delta := offsetHeader - offset
-		// log.Info("============= Reading Packet TS: \n",
-		// 	"id", pathId,
-		// 	"offset", offset,
-		// 	"headoff", offsetHeader,
-		// 	"delta", delta,
-		// 	"listen", c.Listen.String(),
-		// 	"remote", c.Remote.String())
+		log.Info("Read", "delta", offsetHeader-offset)
+		log.Info("============= Reading Packet TS:",
+			"offset", offset,
+			"headoff", offsetHeader)
 	}
 
 	return n, src, err
@@ -132,17 +134,17 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 				// Calculate offset
 				var offset int64 = 0
 
-				// if od, ok := tsDataMap[pathId]; ok {
-				// 	log.Info("=========== Writer Data",
-				// 		"propenult", od.propenultIngTs.UnixNano(),
-				// 		"propenult zero", od.propenultIngTs.IsZero(),
-				// 		"penult", od.penultIngTs.UnixNano(),
-				// 		"penult zero", od.penultIngTs.IsZero(),
-				// 		"last", od.prevIngTs.UnixNano(),
-				// 		"last zero", od.prevIngTs.IsZero(),
-				// 		"egre", od.prevEgrTs.UnixNano(),
-				// 		"egre zero", od.prevEgrTs.IsZero())
-				// }
+				if od, ok := tsDataMap[pathId]; ok {
+					log.Info("=========== Writer Data",
+						"propenult", od.propenultIngTs.UnixNano(),
+						"propenult zero", od.propenultIngTs.IsZero(),
+						"penult", od.penultIngTs.UnixNano(),
+						"penult zero", od.penultIngTs.IsZero(),
+						"last", od.prevIngTs.UnixNano(),
+						"last zero", od.prevIngTs.IsZero(),
+						"egre", od.prevEgrTs.UnixNano(),
+						"egre zero", od.prevEgrTs.IsZero())
+				}
 
 				if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 					if isOrigin {
@@ -197,12 +199,8 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 					paylen += int16(nhbhBytes)
 					b[6] = byte(paylen >> 8)
 					b[7] = byte(paylen)
-					// log.Info("======== Writing packet: \n",
-					// 	"isOrigin", isOrigin,
-					// 	"id", pathId,
-					// 	"offset", offset,
-					// 	"listen", c.Listen.String(),
-					// 	"remote", c.Remote.String())
+					log.Info("======== Writing packet:",
+						"offset", offset)
 				}
 			}
 		}

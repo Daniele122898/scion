@@ -17,11 +17,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type offsetRing struct {
+	offsets    []int64
+	runningSum int64
+	rop        uint8
+}
+
 type pathOffsetData struct {
 	propenultIngTs time.Time
 	penultIngTs    time.Time
 	prevIngTs      time.Time
 	prevEgrTs      time.Time
+	repOffsets     offsetRing
 	counter        uint8
 }
 
@@ -33,6 +40,51 @@ var localIA addr.IA = 0
 
 func SetLocalIA(ia addr.IA) {
 	localIA = ia
+}
+
+func (o *offsetRing) addEntry(offset int64) {
+	o.rop = (o.rop + 1) % 3
+	o.runningSum -= o.offsets[o.rop]
+	o.runningSum += offset
+	o.offsets[o.rop] = offset
+}
+
+func (o *offsetRing) getLatest() int64 {
+	return o.offsets[o.rop]
+}
+
+func (o *offsetRing) getOldest() int64 {
+	return o.offsets[((o.rop + 1) % 3)]
+}
+
+func (o *offsetRing) get(index uint8) int64 {
+	return o.offsets[((o.rop - index) % 3)]
+}
+
+func (p *pathOffsetData) checkRingConditions(ktime *time.Time, ingressId uint16) uint8 {
+	var c uint8 = 0
+	repSum := p.repOffsets.runningSum
+
+	off := ktime.Sub(p.propenultIngTs).Nanoseconds()
+	if off-repSum > offsetThresh {
+		c += 1
+	}
+
+	repSum -= p.repOffsets.get(0)
+	off = p.prevIngTs.Sub(p.propenultIngTs).Nanoseconds()
+	if off-repSum > offsetThresh {
+		c += 1
+	}
+
+	repSum -= p.repOffsets.get(1)
+	off = p.penultIngTs.Sub(p.propenultIngTs).Nanoseconds()
+	if off-repSum > offsetThresh {
+		c += 1
+	}
+
+	p.counter += c
+
+	return c
 }
 
 // Go only has builtin abs function for float64 :)
@@ -156,8 +208,8 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 		od.counter += 1
 		if od.counter >= counterThresh {
 			od.counter = 0
-			log.Info("================================================== ALERT")
-			log.Info("Potential Queueing Delay",
+			log.Info("================================================== ALERT",
+				"Reason", "Potential Queueing Delay",
 				"delta", delta,
 				"headerOffset", headerOffset,
 				"measuredOffset", measuredOffset,
@@ -170,8 +222,8 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 		od.counter += 1
 		if od.counter >= counterThresh {
 			od.counter = 0
-			log.Info("================================================== ALERT")
-			log.Info("Potential Link Health Degradation",
+			log.Info("================================================== ALERT",
+				"Reason", "Potential Link Health Degradation",
 				"delta", delta,
 				"headerOffset", headerOffset,
 				"measuredOffset", measuredOffset,
@@ -181,8 +233,10 @@ func checkOffsetConditions(headerOffset int64, measuredOffset int64, pathId stri
 		}
 	} else {
 		// Everything is fine
-		if od.counter > 0 {
+		if od.counter == 1 {
 			od.counter -= 1
+		} else if od.counter > 1 {
+			od.counter -= 2
 		}
 	}
 }
@@ -350,8 +404,8 @@ func decodeLayers(data []byte, base gopacket.DecodingLayer,
 }
 
 func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
-	mapLock.Lock()
-	defer mapLock.Unlock()
+	// mapLock.Lock()
+	// defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
 		od.prevEgrTs = ts
 	} else {
@@ -361,13 +415,18 @@ func (m offsetMap) addOrUpdateEgressTime(ts time.Time, key string) {
 			prevIngTs:      time.Time{},
 			propenultIngTs: time.Time{},
 			counter:        0,
+			repOffsets: offsetRing{
+				offsets:    make([]int64, 3),
+				runningSum: 0,
+				rop:        0,
+			},
 		}
 	}
 }
 
 func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
-	mapLock.Lock()
-	defer mapLock.Unlock()
+	// mapLock.Lock()
+	// defer mapLock.Unlock()
 	if od, ok := m[key]; ok {
 		od.propenultIngTs = od.penultIngTs
 		od.penultIngTs = od.prevIngTs
@@ -379,23 +438,11 @@ func (m offsetMap) addOrUpdateIngressTime(ts time.Time, key string) {
 			prevEgrTs:      time.Time{},
 			penultIngTs:    time.Time{},
 			propenultIngTs: time.Time{},
-		}
-	}
-}
-
-// TODO: Check if this is still needed
-func (m offsetMap) addOrUpdateIngressTimeOrigin(ts time.Time, key string) {
-	mapLock.Lock()
-	defer mapLock.Unlock()
-	if od, ok := m[key]; ok {
-		od.penultIngTs = ts
-		od.prevIngTs = ts
-	} else {
-		m[key] = &pathOffsetData{
-			prevIngTs:   ts,
-			penultIngTs: ts,
-			prevEgrTs:   time.Time{},
-			counter:     0,
+			repOffsets: offsetRing{
+				offsets:    make([]int64, 3, 3),
+				runningSum: 0,
+				rop:        0,
+			},
 		}
 	}
 }
