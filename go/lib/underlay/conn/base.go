@@ -66,17 +66,17 @@ func (c *connUDPBase) ReadFrom(b []byte) (int, *net.UDPAddr, error) {
 
 		var offset int64 = 0
 		pathId := string(id)
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Read Data",
-				"propenult", od.propenultIngTs.UnixNano(),
-				"propenult zero", od.propenultIngTs.IsZero(),
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Read Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
 		od, ok := tsDataMap[pathId]
 		// if ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
 		// 	offset = od.penultIngTs.Sub(od.propenultIngTs).Nanoseconds()
@@ -134,17 +134,17 @@ func (c *connUDPBase) WriteTo(b []byte, dst *net.UDPAddr) (int, error) {
 				// Calculate offset
 				var offset int64 = 0
 
-				if od, ok := tsDataMap[pathId]; ok {
-					log.Info("=========== Writer Data",
-						"propenult", od.propenultIngTs.UnixNano(),
-						"propenult zero", od.propenultIngTs.IsZero(),
-						"penult", od.penultIngTs.UnixNano(),
-						"penult zero", od.penultIngTs.IsZero(),
-						"last", od.prevIngTs.UnixNano(),
-						"last zero", od.prevIngTs.IsZero(),
-						"egre", od.prevEgrTs.UnixNano(),
-						"egre zero", od.prevEgrTs.IsZero())
-				}
+				// if od, ok := tsDataMap[pathId]; ok {
+				// 	log.Info("=========== Writer Data",
+				// 		"propenult", od.propenultIngTs.UnixNano(),
+				// 		"propenult zero", od.propenultIngTs.IsZero(),
+				// 		"penult", od.penultIngTs.UnixNano(),
+				// 		"penult zero", od.penultIngTs.IsZero(),
+				// 		"last", od.prevIngTs.UnixNano(),
+				// 		"last zero", od.prevIngTs.IsZero(),
+				// 		"egre", od.prevEgrTs.UnixNano(),
+				// 		"egre zero", od.prevEgrTs.IsZero())
+				// }
 
 				if od, ok := tsDataMap[pathId]; ok && !od.propenultIngTs.IsZero() && !od.prevEgrTs.IsZero() {
 					if isOrigin {

@@ -57,17 +57,17 @@ func (c *connUDPIPv4) ReadBatch(msgs Messages) (int, error) {
 		offsetHeader, id := offsetData.parseOffsetHeaderData()
 		pathId := string(id)
 
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Read Batch Data",
-				"propenult", od.propenultIngTs.UnixNano(),
-				"propenult zero", od.propenultIngTs.IsZero(),
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Read Batch Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
 
 		var offset int64 = 0
 		// if od, ok := tsDataMap[pathId]; ok && !od.penultIngTs.IsZero() && !od.propenultIngTs.IsZero() {
@@ -118,17 +118,17 @@ func (c *connUDPIPv4) WriteBatch(msgs Messages, flags int) (int, error) {
 		// Calculate offset
 		var offset int64 = 0
 
-		if od, ok := tsDataMap[pathId]; ok {
-			log.Info("=========== Writer BATCH Data",
-				"propenult", od.propenultIngTs.UnixNano(),
-				"propenult zero", od.propenultIngTs.IsZero(),
-				"penult", od.penultIngTs.UnixNano(),
-				"penult zero", od.penultIngTs.IsZero(),
-				"last", od.prevIngTs.UnixNano(),
-				"last zero", od.prevIngTs.IsZero(),
-				"egre", od.prevEgrTs.UnixNano(),
-				"egre zero", od.prevEgrTs.IsZero())
-		}
+		// if od, ok := tsDataMap[pathId]; ok {
+		// 	log.Info("=========== Writer BATCH Data",
+		// 		"propenult", od.propenultIngTs.UnixNano(),
+		// 		"propenult zero", od.propenultIngTs.IsZero(),
+		// 		"penult", od.penultIngTs.UnixNano(),
+		// 		"penult zero", od.penultIngTs.IsZero(),
+		// 		"last", od.prevIngTs.UnixNano(),
+		// 		"last zero", od.prevIngTs.IsZero(),
+		// 		"egre", od.prevEgrTs.UnixNano(),
+		// 		"egre zero", od.prevEgrTs.IsZero())
+		// }
 
 		goTime := time.Now()
 		var offsetNoQueue int64 = 0
